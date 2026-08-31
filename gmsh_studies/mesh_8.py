@@ -1,6 +1,15 @@
+#!/usr/bin/env python3
+
+
+# gmsh documentation (https://gmsh.info/doc/texinfo/gmsh.html) 
+# gmsh distribution (https://gitlab.onelab.info/gmsh/gmsh/-/tree/gmsh_4_15_2)
+
+
+# CONTENT: How to manipulate mesh shapes
 
 
 import gmsh
+
 
 gmsh.initialize()
 
@@ -20,6 +29,12 @@ cl = gmsh.model.geo.addCurveLoop([l1, l2, l3, l4])
 pl = gmsh.model.geo.addPlaneSurface([cl])
 
 gmsh.model.geo.synchronize()
+
+# -----------------------------------------------------------------------------
+# ---- NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT ----
+# -----------------------------------------------------------------------------
+# ---- NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT ----
+# -----------------------------------------------------------------------------
 
 field = gmsh.model.mesh.field
 field.add("MathEval", 1)

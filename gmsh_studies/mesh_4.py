@@ -5,6 +5,9 @@
 # gmsh distribution (https://gitlab.onelab.info/gmsh/gmsh/-/tree/gmsh_4_15_2)
 
 
+# CONTENT: Setting strings and collors
+
+
 import gmsh
 import math
 

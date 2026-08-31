@@ -5,6 +5,9 @@
 # gmsh distribution (https://gitlab.onelab.info/gmsh/gmsh/-/tree/gmsh_4_15_2)
 
 
+# CONTENT: Filling spaces between surfaces meshing it
+
+
 import gmsh
 
 
@@ -126,7 +129,7 @@ def cheeseHole(x, y, z, r, lc, shells):
 
     """
     Non-plane surfaces will define spherical holes.
-    gmsh.model.geo.addSurfaceFilling can be used for surfaces with 3-4 curver 
+    gmsh.model.geo.addSurfaceFilling can be used for surfaces with 3-4 curves 
     on their boundary.
     If curves are circle arcs with the same center, a spherical patch is 
     created; otherwise transfinite interpolation is used.
@@ -144,8 +147,10 @@ def cheeseHole(x, y, z, r, lc, shells):
     s7 = gmsh.model.geo.addSurfaceFilling([l7])
     s8 = gmsh.model.geo.addSurfaceFilling([l8])
 
-    sl = gmsh.model.geo.addSurfaceLoop([s1, s2, s3, s4, s5, s6, s7, s8])
+    # sl = gmsh.model.geo.addSurfaceLoop([s1, s2, s3, s4, s5, s6, s7, s8])
+    sl = gmsh.model.geo.addSurfaceLoop([l1, l2, l3, l4, l5, l6, l7, l8])
     v = gmsh.model.geo.addVolume([sl])
+
     shells.append(sl)
     return v
 
@@ -161,7 +166,7 @@ for t in range(1, 6):
     v = cheeseHole(x, y, z, r, lcar3, shells)
     gmsh.model.geo.addPhysicalGroup(3, [v], t)
 
-# 
+
 gmsh.model.geo.addVolume(shells, 186)
 
 gmsh.model.geo.synchronize()

@@ -1,3 +1,11 @@
+#!/usr/bin/env python3
+
+
+# gmsh documentation (https://gmsh.info/doc/texinfo/gmsh.html) 
+# gmsh distribution (https://gitlab.onelab.info/gmsh/gmsh/-/tree/gmsh_4_15_2)
+
+
+# CONTENT: How to set number of points and distribute them into a line/curve
 
 
 import gmsh
@@ -21,6 +29,14 @@ factory.addLine(4, 1, 4)
 factory.addCurveLoop([4, 1, -2, 3], 1)
 factory.addPlaneSurface([1], 1)
 
+
+# -----------------------------------------------------------------------------
+# ---- NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT ----
+# -----------------------------------------------------------------------------
+# ---- NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT ----
+# -----------------------------------------------------------------------------
+
+
 # DELETE THE SURFACE AND THE LEFT LINE
 factory.remove([(2, 1), (1, 4)])
 
@@ -32,6 +48,8 @@ l3 = factory.addLine(p2, 4)
 
 factory.addCurveLoop([2, -1, l1, l2, l3, -3], 2)
 factory.addPlaneSurface([-2], 1)
+
+
 
 # forces 20 uniformly placed nodes on curve 2
 factory.mesh.setTransfiniteCurve(2, 20)

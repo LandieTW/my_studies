@@ -1,3 +1,11 @@
+#!/usr/bin/env python3
+
+
+# gmsh documentation (https://gmsh.info/doc/texinfo/gmsh.html) 
+# gmsh distribution (https://gitlab.onelab.info/gmsh/gmsh/-/tree/gmsh_4_15_2)
+
+
+# CONTENT: Differents ways how to manipulate mesh sizes
 
 
 import gmsh
@@ -7,7 +15,7 @@ gmsh.initialize()
 
 gmsh.model.add("Model")
 
-# Let's create a simple rectangular geometry:
+# Simple rectangular geometry:
 lc = .15
 gmsh.model.geo.addPoint(0.0, 0.0, 0, lc, 1)
 gmsh.model.geo.addPoint(1, 0.0, 0, lc, 2)
@@ -25,11 +33,19 @@ gmsh.model.geo.addPlaneSurface([5], 6)
 
 gmsh.model.geo.synchronize()
 
-# if we want to obtain mesh elements with size lc/30 near curve 2 and point 5
+
+# -----------------------------------------------------------------------------
+# ---- NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT ----
+# -----------------------------------------------------------------------------
+# ---- NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT ----
+# -----------------------------------------------------------------------------
+
+
+# To obtain mesh elements with size lc/30 near curve 2 and point 5
 # and size lc elsewhere. We do it with "Distance" AND "Threshold".
 
 # DISTANCE
-# We define a Distance field 'Field[1] on points 5 and on curve 2.
+# Distance field 'Field[1] on points 5 and on curve 2.
 # This field returns the distance to point 5 and to (100 equidistant points on) 
 # curve 2
 gmsh.model.mesh.field.add("Distance", 1)
@@ -38,7 +54,7 @@ gmsh.model.mesh.field.setNumbers(1, "CurvesList", [2])
 gmsh.model.mesh.field.setNumber(1, "Sampling", 100)
 
 # THRESHOLD
-# We define a 'Threshold' field, which uses the return value of the 'Distance'
+# 'Threshold' field, which uses the return value of the 'Distance'
 # field 1 in order to define a simple change in element size depending on the
 # computed distances
 gmsh.model.mesh.field.add("Threshold", 2)
@@ -51,7 +67,10 @@ gmsh.model.mesh.field.setNumber(2, "DistMax", 0.5)
 # modulating mesh size using mathematical function of spatial coord.
 gmsh.model.mesh.field.add("MathEval", 3)
 gmsh.model.mesh.field.setString(
-    3, "F", "cos(4*3.14*x) * sin(4*3.14*y) / 10 + 0.101")
+    3,
+    "F",
+    "cos(4*3.14*x) * sin(4*3.14*y) / 10 + 0.101"
+    )
 
 # Also, it's possible to combine MathEval with values coming from other fields.
 gmsh.model.mesh.field.add("Distance", 4)

@@ -1,3 +1,11 @@
+#!/usr/bin/env python3
+
+
+# gmsh documentation (https://gmsh.info/doc/texinfo/gmsh.html) 
+# gmsh distribution (https://gitlab.onelab.info/gmsh/gmsh/-/tree/gmsh_4_15_2)
+
+
+# CONTENT: Configure curves to be identified as one, when meshing
 
 
 import gmsh
@@ -67,6 +75,12 @@ gmsh.model.geo.addCurveLoop([-10, 2, 1, 8], 15)
 gmsh.model.geo.addSurfaceFilling([15], 10)
 
 gmsh.model.geo.synchronize()
+
+# -----------------------------------------------------------------------------
+# ---- NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT ----
+# -----------------------------------------------------------------------------
+# ---- NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT ----
+# -----------------------------------------------------------------------------
 
 # Treat curves 2, 3 and 4 as a single curve when meshing (i.e. mesh across
 # points 6 and 7)

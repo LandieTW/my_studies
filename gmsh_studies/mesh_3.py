@@ -5,6 +5,9 @@
 # gmsh distribution (https://gitlab.onelab.info/gmsh/gmsh/-/tree/gmsh_4_15_2)
 
 
+# CONTENT: Extrusion, Revolution, Twisting, Point edition and Interactivity
+
+
 import gmsh
 import math
 
