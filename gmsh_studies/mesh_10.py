@@ -58,7 +58,8 @@ e = gmsh.model.geo.extrude([(2, 15)], 0, 0, h)
 gmsh.model.geo.synchronize()
 
 
-# Physical groups which are used to define (co)homology computacion domain and subdomain
+# Physical groups which are used to define 
+# (co)homology computacion domain and subdomain
 
 # whole domain
 domain_tag = e[1][1]
@@ -109,16 +110,44 @@ gmsh.model.addPhysicalGroup(2, complement_tags, complement_physical_tag, "Comple
 # ---- NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT ----
 # -----------------------------------------------------------------------------
 
+
+# HOMOLOGY
+# Search for closed loops in the domain module.
+# When some loop can't be closed, it means that it is a geometric hole
+
+
 # Find bases for relative homology spaces of the domain modulo the four terminals.
-gmsh.model.mesh.addHomologyRequest("Homology", [domain_physical_tag], [terminals_physical_tag], [0, 1, 2, 3])
+gmsh.model.mesh.addHomologyRequest(
+    "Homology", 
+    [domain_physical_tag], 
+    [terminals_physical_tag], 
+    [0, 1, 2, 3]
+    )
 
 # Find homology space bases isomorphic to the previous bases: homology spaces
 # modulo the non-terminal domain surface, a.k.a the thin cuts.
-gmsh.model.mesh.addHomologyRequest("Homology", [domain_physical_tag], [complement_physical_tag], [0, 1, 2, 3])
+gmsh.model.mesh.addHomologyRequest(
+    "Homology", 
+    [domain_physical_tag], 
+    [complement_physical_tag], 
+    [0, 1, 2, 3]
+    )
+
+
+# COHOMOLOGY
+# It's the Homology dual.
+# Assuming closed loops are found in the domain, search for functions defined 
+# on the domain.
+
 
 # Find cohomology space bases isomorphic to the previous bases: cohomology
-# spaces of the domain modulo the four terminals, a.k.a the thick cuts.
-gmsh.model.mesh.addHomologyRequest("Cohomology", [domain_physical_tag], [terminals_physical_tag], [0, 1, 2, 3])
+# spaces of the domain module the four terminals
+gmsh.model.mesh.addHomologyRequest(
+    "Cohomology", 
+    [domain_physical_tag], 
+    [terminals_physical_tag], 
+    [0, 1, 2, 3]
+    )
 
 
 # more examples
@@ -130,14 +159,8 @@ gmsh.model.mesh.addHomologyRequest("Cohomology", [domain_physical_tag], [termina
 # Generate the mesh and perform the requested homology computations
 gmsh.model.mesh.generate(3)
 
-# For more information, see M. Pellikka, S. Suuriniemi, L. Kettunen and
-# C. Geuzaine. Homology and cohomology computation in finite element
-# modeling. SIAM Journal on Scientific Computing 35(5), pp. 1195-1214, 2013.
-
 # Launch the GUI to see the results:
 gmsh.fltk.run()
 
 gmsh.finalize()
-
-
 

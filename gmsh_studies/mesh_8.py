@@ -44,32 +44,29 @@ field.setAsBackgroundMesh(1)
 # TO GENERATE QUADRANGLES INSTEAD OF TRIANGLES
 gmsh.model.mesh.setRecombine(2, pl)
 
-# COULD USE ALSO
-# Mesh.RecombineAll
+# COULD USE ALSO - Mesh.RecombineAll
 gmsh.option.setNumber("Mesh.RecombineAll", 1)
 
-'''
-The default recombination algorithm is called "Blossom"
-It uses a minimum cost perfect matching algorithm to generate fully 
-quadrilateral meshes from triangulations.
-'''
 
-'''
-For even better 2D (planar) quadrilateral meshes, you can try the experimental
-Frontal-Delaunay for quads meshing algorithm, which is a triagulation algorithm
-that creates right triangles almost everywhere.
-'''
+# 'Blossom' is the defaul recombintaiom algorithm
+# (It uses a minimum cost perfect matching algorithm to generate fully 
+# quadrilateral meshes from triangulations.)
+
+
+# For better 2D planar quadrilateral meshes...
+# Experiemtal Frontal-Delaunay for quads meshing algorithm must be set
+# (It creates right triangles almost everywhere with a triangulation algorithm.)
 gmsh.option.setNumber("Mesh.Algorithm", 8)
 
-'''
-To generate full-quad meshes, you can either subdivide the resulting hybrid
-mesh or use the full-quad recombination algorithm, wich will automatically
-perform a coarser mesh followed by recombination, smoothing and subdivision.
-'''
-gmsh.option.setNumber("Mesh.RecombinationAlgorithm", 2)     # or 3
 
-# subsivision
+# For full-quad meshes, it's possible to subdivide the resulting hybrid mesh
 gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)
+
+
+# Or use the full-quad recombination algorithm, which will automatically perform
+# a coarser mesh followed by recombination, smoothing and subdivision.
+gmsh.option.setNumber("Mesh.RecombinationAlgorithm", 2) # or 3
+
 
 gmsh.model.mesh.refine()
 

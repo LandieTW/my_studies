@@ -53,6 +53,8 @@ def createGeometryAndMesh():
     )
 
     # EXTRUSION WITH ROTATION
+    # (only angle < Pi is supported with the built-in geometry kernel)
+    # (OpenCASCADE geometry kernel does not have this limitation)
     ov = gmsh.model.geo.revolve(
         [(2, 28)],                      # points tags
         -0.1, 0, 0.1,                   # axis point
@@ -60,10 +62,6 @@ def createGeometryAndMesh():
         -math.pi / 2,                   # revolve angle
         [7]
     )
-
-    # Using the built-in geometry kernel, only rotations with angles < Pi are
-    # supported. To do a full turn, you will thus need to apply at least 3
-    # rotations. The OpenCASCADE geometry kernel does not have this limitation.
 
     # TRANSLATION AND ROTATION AT SAME TIME = TWIST
     angle = gmsh.onelab.getNumber('Parameters/Twisting angle')[0]
@@ -78,9 +76,10 @@ def createGeometryAndMesh():
         True                                # mesh recombination after twisting
     )
 
-    # All the extrusion functions return a vector of extruded entities: the
-    # "top" of the extruded surface (in `ov[0]'), the newly created volume (in
-    # `ov[1]') and the tags of the lateral surfaces (in `ov[2]', `ov[3]', ...).
+    # Extrusion functions return a vector of extruded entities:
+    # ov[0] = "top" of the extruded surface
+    # ov[1] = newly created volume
+    # ov[2], ov[3], ... = tags of the lateral surfaces
 
     gmsh.model.geo.synchronize()
 
@@ -97,12 +96,7 @@ gmsh.option.setColor("Mesh.Color.Points", 255, 0, 0)
 r, g, b, a = gmsh.option.getColor("Geometry.Points")
 gmsh.option.setColor("Geometry.Surfaces", r, g, b, a)
 
-# We create a ONELAB parameter to define the angle of the twist. ONELAB
-# parameters can be modified interactively in the GUI, and can be exchanged with
-# other codes connected to the same ONELAB database. The database can be
-# accessed through the Gmsh Python API using JSON-formatted strings (see
-# https://gitlab.onelab.info/doc/models/wikis/ONELAB-JSON-interface for more
-# information):
+# ONELAB database: https://gitlab.onelab.info/doc/models/wikis/ONELAB-JSON-interface
 gmsh.onelab.set("""[
   {
     "type":"number",

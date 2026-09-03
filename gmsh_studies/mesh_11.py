@@ -21,7 +21,6 @@ import gmsh
 
 gmsh.initialize()
 
-
 lc = 1e-2
 gmsh.model.geo.addPoint(0, 0, 0, lc, 1)
 gmsh.model.geo.addPoint(.1, 0, 0, lc, 2)
@@ -34,14 +33,11 @@ gmsh.model.geo.addLine(4, 1, 4)
 gmsh.model.geo.addCurveLoop([4, 1, -2, 3], 1)
 gmsh.model.geo.addPlaneSurface([1], 1)
 
-# We change the mesh size to generate a coarser mesh
 lc = lc * 4
 gmsh.model.geo.mesh.setSize([(0, 1), (0, 2), (0, 3), (0, 4)], lc)
-
-# We define a new point
 gmsh.model.geo.addPoint(0.02, 0.02, 0., lc, 5)
 
-# We have to synchronize before embedding entites:
+# Must synchronize before embedding entites:
 gmsh.model.geo.synchronize()
 
 # -----------------------------------------------------------------------------
@@ -50,12 +46,10 @@ gmsh.model.geo.synchronize()
 # ---- NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT ----
 # -----------------------------------------------------------------------------
 
-# One can force this point to be included ("embedded") in the 2D mesh, using the
-# `embed()' function:
+# `embed()' function forces a point to be embedded in the 2D mesh
 gmsh.model.mesh.embed(0, [5], 2, 1)
 
-# In the same way, one can use `embed()' to force a curve to be embedded in the
-# 2D mesh:
+# `embed()' function forces a curve to be embedded in the 2D mesh
 gmsh.model.geo.addPoint(0.02, 0.12, 0., lc, 6)
 gmsh.model.geo.addPoint(0.04, 0.18, 0., lc, 7)
 gmsh.model.geo.addLine(6, 7, 5)
@@ -63,7 +57,7 @@ gmsh.model.geo.addLine(6, 7, 5)
 gmsh.model.geo.synchronize()
 gmsh.model.mesh.embed(1, [5], 2, 1)
 
-# Points and curves can also be embedded in volumes
+# Embed points and curves in volumes
 gmsh.model.geo.extrude([(2, 1)], 0, 0, 0.1)
 
 p = gmsh.model.geo.addPoint(0.07, 0.15, 0.025, lc)
@@ -77,7 +71,7 @@ l = gmsh.model.geo.addLine(7, p + 1)
 gmsh.model.geo.synchronize()
 gmsh.model.mesh.embed(1, [l], 3, 1)
 
-# Finally, we can also embed a surface in a volume:
+# Embed a surface in a volume:
 gmsh.model.geo.addPoint(0.02, 0.12, 0.05, lc, p + 2)
 gmsh.model.geo.addPoint(0.04, 0.12, 0.05, lc, p + 3)
 gmsh.model.geo.addPoint(0.04, 0.18, 0.05, lc, p + 4)
@@ -92,26 +86,16 @@ ll = gmsh.model.geo.addCurveLoop([l + 1, l + 2, l + 3, l + 4])
 s = gmsh.model.geo.addPlaneSurface([ll])
 
 gmsh.model.geo.synchronize()
+
+
+# With OpenCASCADE kernel, when the fragment function is applied to entities of
+# different dimensions, the lower is automatically embedded in the higher
 gmsh.model.mesh.embed(2, [s], 3, 1)
 
-# Note that with the OpenCASCADE kernel (see `t16.py'), when the `fragment()'
-# function is applied to entities of different dimensions, the lower dimensional
-# entities will be automatically embedded in the higher dimensional entities if
-# necessary.
 
 gmsh.model.mesh.generate(3)
-
 
 gmsh.fltk.run()
 
 gmsh.finalize()
-
-
-
-
-
-
-
-
-
 

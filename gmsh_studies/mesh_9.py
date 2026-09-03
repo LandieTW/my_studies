@@ -5,40 +5,12 @@
 # gmsh distribution (https://gitlab.onelab.info/gmsh/gmsh/-/tree/gmsh_4_15_2)
 
 
-# CONTENT: Configure curves to be identified as one, when meshing
+# CONTENT: Configuring meshing constraints to generate meshes across surface 
+# boundaries (Compound meshing constraints)
 
 
 import gmsh
 
-
-# "Compound" meshing constraints can generate meshes across surface
-# boundaries, which can be useful e.g. for imported CAD models (e.g. STEP) with
-# undesired small features.
-
-# When a `setCompound()' meshing constraint is given, at mesh generation time
-# Gmsh
-#  1. meshes the underlying elementary geometrical entities, individually
-#  2. creates a discrete entity that combines all the individual meshes
-#  3. computes a discrete parametrization (i.e. a piece-wise linear mapping)
-#     on this discrete entity
-#  4. meshes the discrete entity using this discrete parametrization instead
-#     of the underlying geometrical description of the underlying elementary
-#     entities making up the compound
-#  5. optionally, reclassifies the mesh elements and nodes on the original
-#     entities
-
-# Step 3. above can only be performed if the mesh resulting from the
-# combination of the individual meshes can be reparametrized, i.e. if the shape
-# is "simple enough". If the shape is not amenable to reparametrization, you
-# should create a full mesh of the geometry and first re-classify it to
-# generate patches amenable to reparametrization (see `t13.py').
-
-# The mesh of the individual entities performed in Step 1. should usually be
-# finer than the desired final mesh; this can be controlled with the
-# `Mesh.CompoundMeshSizeFactor' option.
-
-# The optional reclassification on the underlying elementary entities in Step
-# 5. is governed by the `Mesh.CompoundClassify' option.
 
 gmsh.initialize()
 
@@ -81,6 +53,23 @@ gmsh.model.geo.synchronize()
 # -----------------------------------------------------------------------------
 # ---- NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT - NEW CONTENT ----
 # -----------------------------------------------------------------------------
+
+
+# setCompound
+# 1. meshes the underlying elementary geometrical entities, individually;
+#    NOTE: step 1 mesh must be finer than the desired final mesh;
+#          (Mesh.CompoundMeshSizeFactor)
+# 2. creates a discrete entity that combines all the individual meshes;
+# 3. computes a discrete parametrization (i.e. a piece-wise linear mapping)
+#    on this discrete entity;
+#    NOTE: that only occurs if the shape is "simple enough" to be reparametrized;
+#          If shape is not simple enough...
+#          must be created a full mesh of the geometry and first re-classify it
+#          to generate patches amenable to reparametrization
+# 4. meshes the discrete entity using this discrete parametrization;
+# 5. optionally, reclassifies the mesh elements and nodes.
+#    (Mesh.CompoundClassify)
+
 
 # Treat curves 2, 3 and 4 as a single curve when meshing (i.e. mesh across
 # points 6 and 7)
