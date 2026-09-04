@@ -1,17 +1,12 @@
-# -----------------------------------------------------------------------------
-#
-#  Gmsh Python extended tutorial 1
-#
-#  Geometry and mesh data
-#
-# -----------------------------------------------------------------------------
+#!/usr/bin/env python3
 
-# The Python API can do much more than what can be done in .geo
-# files. These additional features are introduced gradually in the extended
-# tutorials, starting with `x1.py'.
 
-# In this first extended tutorial, we start by using the API to access basic
-# geometrical and mesh data.
+# gmsh documentation (https://gmsh.info/doc/texinfo/gmsh.html) 
+# gmsh distribution (https://gitlab.onelab.info/gmsh/gmsh/-/tree/gmsh_4_15_2)
+
+
+# CONTENT: Geometry and Mesh Data controlled by the API
+
 
 import gmsh
 
