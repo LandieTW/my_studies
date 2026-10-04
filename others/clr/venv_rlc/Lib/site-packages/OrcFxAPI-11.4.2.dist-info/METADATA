@@ -1,0 +1,28 @@
+Metadata-Version: 2.1
+Name: OrcFxAPI
+Version: 11.4.2
+Summary: Python interface to the OrcaFlex API
+Home-page: https://www.orcina.com/
+Author: Orcina
+Author-email: orcina@orcina.com
+License: Commercial
+Platform: Windows
+Requires-Python: >=3.6
+Requires-Dist: numpy >=1.19
+
+
+Python interface to the OrcaFlex API
+====================================
+
+OrcaFlex (https://www.orcina.com/orcaflex/), developed by Orcina Ltd.
+(https://www.orcina.com/), is a finite element analysis tool used primarily for offshore engineering.
+OrcaFlex has a powerful graphical user interface (GUI) that makes tasks such as model development
+very efficient.
+
+The program also offers a number of methods to automate its use. These range from
+Excel based automation facilities to the low-level programming interface, known as OrcFxAPI.
+Interfaces with a number of different programming languages are available. At the time of writing
+these languages are: C, C++, C#, Delphi, Matlab and Python.
+
+This package implements the Python interface to the OrcaFlex API. Documentation can be found
+at https://www.orcina.com/webhelp/OrcFxAPI/

@@ -1,0 +1,9633 @@
+﻿# Interface module for OrcFxAPI.dll, version 9.5a and later
+
+import sys
+import os
+from datetime import datetime
+import locale
+import functools
+import contextlib
+import enum
+import ctypes
+import ctypes.wintypes
+import numpy
+import numpy.ctypeslib
+import OrcFxAPIConfig
+from collections.abc import Mapping, MutableMapping
+from typing import (
+    Any,
+    Union,
+    Optional,
+    Sequence,
+    Tuple,
+    List,
+    Iterable,
+    Type,
+    Callable,
+    Generator,
+    Iterator,
+)
+import typing
+
+_numpyMajor, _numpyMinor = [int(item) for item in numpy.__version__.split(".")][:2]
+_numpyTypingSupported = _numpyMajor > 1 or (_numpyMajor == 1 and _numpyMinor >= 20)
+if _numpyTypingSupported:
+    from numpy.typing import ArrayLike
+else:
+    ArrayLike = Any  # type: ignore [misc]
+_supportsGenerics = sys.version_info[0] > 3 or (sys.version_info[0] == 3 and sys.version_info[1] >= 9)
+
+_interfaceCapabilities = 1
+_lib = OrcFxAPIConfig.lib()
+
+_Encoding = locale.getdefaultlocale()[1]
+_char = ctypes.c_wchar
+_pchar = ctypes.c_wchar_p
+Handle = ctypes.c_void_p
+
+_BeginEndDataChangeAvailable = hasattr(_lib, "C_BeginDataChange")
+_GetObjectTypeFromHandleAvailable = hasattr(_lib, "C_GetObjectTypeFromHandle")
+_ReportActionProgressAvailable = hasattr(_lib, "C_ReportActionProgressW")
+_GetFrequencyDomainProcessComponents2Available = hasattr(_lib, "C_GetFrequencyDomainProcessComponents2")
+_CalculateRratioAvailable = hasattr(_lib, "C_CalculateRratio")
+_DataRequiresIndexAvailable = hasattr(_lib, "C_DataRequiresIndexW")
+
+
+def _redirectOutputToOrcaFlex() -> None:
+    class outputStream(object):
+        def write(self, str):
+            status = ctypes.c_int()
+            _ExternalFunctionPrint(str, status)
+            _CheckStatus(status)
+
+    sys.stderr = sys.stdout = outputStream()  # type: ignore [assignment]
+
+
+def _redirectOutputToNull() -> None:
+    class outputStream(object):
+        def write(self, str):
+            pass
+
+    sys.stderr = sys.stdout = outputStream()  # type: ignore [assignment]
+
+
+def _DecodeString(value: Union[bytes, str]) -> str:
+    if isinstance(value, bytes):
+        assert _Encoding is not None
+        return value.decode(_Encoding)  # byte data to string
+    else:
+        return value
+
+
+class FunctionNotFound(object):
+    def __init__(self, name: str):
+        self.name = name
+
+    def __call__(self, *args, **kwargs):
+        raise MissingRequirementError(
+            'Function "' + self.name + '" is not exported by the linked OrcFxAPI DLL'
+        )
+
+
+def ImportedFunctionAvailable(func):
+    return not isinstance(func, FunctionNotFound)
+
+
+def _bind(lib, name, restype, *argtypes):
+    func = getattr(lib, name, None)
+    if func is not None:
+        func.restype = restype
+        func.argtypes = argtypes
+        return func
+    else:
+        return FunctionNotFound(name)
+
+
+_bindToOrcFxAPI = functools.partial(_bind, _lib)
+
+# declare functions that we import from system libraries
+_DeleteObject = _bind(ctypes.windll.gdi32, "DeleteObject", ctypes.wintypes.BOOL, Handle)
+
+_GetModuleFileName = _bind(
+    ctypes.windll.kernel32,
+    "GetModuleFileNameW",
+    ctypes.wintypes.DWORD,
+    Handle,
+    _pchar,
+    ctypes.wintypes.DWORD,
+)
+
+_mmioStringToFOURCCA = _bind(
+    ctypes.windll.winmm,
+    "mmioStringToFOURCCA",
+    ctypes.c_uint32,
+    ctypes.c_char_p,
+    ctypes.c_uint32,
+)
+
+_SysFreeString = _bind(ctypes.windll.OleAut32, "SysFreeString", None, ctypes.c_void_p)
+
+# declare these functions first so that they can be used by structure definitions
+_GetDLLVersion = _bindToOrcFxAPI(
+    "C_GetDLLVersionW",
+    None,
+    ctypes.POINTER(_char * 16),
+    ctypes.POINTER(_char * 16),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_OrcinaDefaultReal = _bindToOrcFxAPI("OrcinaDefaultReal", ctypes.c_double)
+
+_OrcinaDittoReal = _bindToOrcFxAPI("OrcinaDittoReal", ctypes.c_double)
+
+_OrcinaInfinity = _bindToOrcFxAPI("OrcinaInfinity", ctypes.c_double)
+
+_OrcinaUndefinedReal = _bindToOrcFxAPI("OrcinaUndefinedReal", ctypes.c_double)
+
+_OrcinaNullReal = _bindToOrcFxAPI("OrcinaNullReal", ctypes.c_double)
+
+
+def _checkVersion(requiredVersion: str) -> bool:
+    s = (_char * 16)()
+    s.value = requiredVersion
+    OK = ctypes.c_int()
+    status = ctypes.c_int()
+    _GetDLLVersion(s, (_char * 16)(), OK, status)
+    _CheckStatus(status)
+    return OK.value == 1
+
+
+def _supportsVesselDisturbance() -> bool:
+    return _checkVersion("9.7a")
+
+
+def _supportsModeTypeClassification() -> bool:
+    return _checkVersion("9.7a")
+
+
+def _supportsShadedFillMode() -> bool:
+    return _checkVersion("9.8a")
+
+
+def _supportsGetModelProperty() -> bool:
+    return _checkVersion("10.0a")
+
+
+def _supportsDrawNameLabels() -> bool:
+    return _checkVersion("10.2a")
+
+
+def _supportsLineFeeding() -> bool:
+    return _checkVersion("10.2a")
+
+
+def _supportsDrawOrigins() -> bool:
+    return _checkVersion("11.0a")
+
+
+def _supportsJpegCompressionQuality() -> bool:
+    return _checkVersion("11.1a")
+
+
+def _supportsModalMassStiffness() -> bool:
+    return _checkVersion("11.1a")
+
+
+def _supportsTimeSeriesStatisticsRMS() -> bool:
+    return _checkVersion("11.2a")
+
+
+# http://stackoverflow.com/questions/43867646/
+class pbyte(ctypes.POINTER(ctypes.c_char)):  # type: ignore[misc]
+    _type_ = ctypes.c_char
+
+    @classmethod
+    def from_param(cls, param, array_t=ctypes.c_char * 0):
+        if isinstance(param, bytearray):
+            param = array_t.from_buffer(param)
+        return super(pbyte, cls).from_param(param)
+
+
+def _allocateArray(length: int) -> numpy.ndarray:
+    return numpy.empty(length, dtype=numpy.float64)
+
+
+def _prepareArray(array: ArrayLike) -> numpy.ndarray:
+    if array is not numpy.ndarray or array.dtype != numpy.float64:  # type: ignore [union-attr]
+        return numpy.array(array, dtype=numpy.float64)
+    else:
+        return array  # type: ignore [return-value]
+
+
+def _allocateIntArray(length: int) -> numpy.ndarray:
+    return numpy.empty(length, dtype=numpy.int32)
+
+
+def _getArrayData(array):
+    return array.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+
+
+_array = numpy.array
+
+# http://stackoverflow.com/q/32120178/
+
+
+def wrapped_ndpointer(*args, **kwargs):
+    base = numpy.ctypeslib.ndpointer(*args, **kwargs)
+
+    def from_param(cls, obj):
+        if obj is None:
+            return obj
+        return base.from_param(obj)
+
+    return type(base.__name__, (base,), {"from_param": classmethod(from_param)})
+
+
+ByteArrayType = wrapped_ndpointer(dtype=numpy.uint8, ndim=1, flags="C_CONTIGUOUS")
+IntArrayType = wrapped_ndpointer(dtype=numpy.int32, ndim=1, flags="C_CONTIGUOUS")
+DoubleArrayType = wrapped_ndpointer(dtype=numpy.float64, ndim=1, flags="C_CONTIGUOUS")
+ComplexArrayType = wrapped_ndpointer(dtype=numpy.complex128, ndim=1, flags="C_CONTIGUOUS")
+HandleArrayType = wrapped_ndpointer(dtype=Handle, ndim=1, flags="C_CONTIGUOUS")
+
+
+@enum.unique
+class StatusCode(enum.IntEnum):
+    OK = 0
+    DLLsVersionError = 1
+    CreateModelError = 2
+    ModelHandleError = 3
+    ObjectHandleError = 4
+    InvalidObjectType = 5
+    FileNotFound = 6
+    FileReadError = 7
+    TimeHistoryError = 8
+    NoSuchNodeNum = 9
+    InvalidPropertyNum = 10
+    InvalidPeriod = 12
+    InvalidVarNum = 13
+    RangeGraphError = 14
+    InvalidObjectExtra = 15
+    NotEnoughVars = 16
+    InvalidVars = 17
+    UnrecognisedVarNum = 18
+    InvalidHandle = 19
+    UnexpectedError = 20
+    InvalidIndex = 21
+    NoSuchObject = 23
+    NotAVariantArray = 24
+    LicensingError = 25
+    UnrecognisedVarName = 26
+    StaticsFailed = 27
+    FileWriteError = 28
+    OperationCancelled = 29
+    SolveEquationFailed = 30
+    InvalidDataName = 31
+    InvalidDataType = 32
+    InvalidDataAccess = 33
+    InvalidVersion = 34
+    InvalidStructureSize = 35
+    RequiredModulesNotEnabled = 36
+    PeriodNotYetStarted = 37
+    CouldNotDestroyObject = 38
+    InvalidModelState = 39
+    SimulationError = 40
+    InvalidModule = 41
+    InvalidResultType = 42
+    InvalidViewParameters = 43
+    CannotExtendSimulation = 44
+    UnrecognisedObjectTypeName = 45
+    UnknownModelState = 46
+    FunctionNotAvailable = 47
+    StructureSizeTooSmall = 48
+    InvalidParameter = 49
+    ResponseGraphError = 50
+    ResultsNotAvailableWhenNotIncludedInStatics = 51
+    InvalidFileType = 52
+    BatchScriptFailed = 53
+    InvalidTimeHistoryValues = 54
+    ResultsNotLogged = 55
+    WizardFailed = 56
+    DLLInitFailed = 57
+    InvalidArclengthRange = 58
+    ValueNotAvailable = 59
+    InvalidValue = 60
+    ModalAnalysisFailed = 61
+    VesselTypeDataImportFailed = 62
+    OperationNotAvailable = 63
+    FatigueAnalysisFailed = 64
+    ExtremeStatisticsFailed = 65
+    TagNotFound = 66
+    InvalidFileFormat = 67
+    ThreadAffinityError = 68
+    FileReadParentError = 69
+
+
+# Status constants returned by API functions (deprecated, use StatusCode)
+stOK = 0
+stDLLsVersionError = 1
+stCreateModelError = 2
+stModelHandleError = 3
+stObjectHandleError = 4
+stInvalidObjectType = 5
+stFileNotFound = 6
+stFileReadError = 7
+stTimeHistoryError = 8
+stNoSuchNodeNum = 9
+stInvalidPropertyNum = 10
+stInvalidPeriod = 12
+stInvalidVarNum = 13
+stRangeGraphError = 14
+stInvalidObjectExtra = 15
+stNotEnoughVars = 16
+stInvalidVars = 17
+stUnrecognisedVarNum = 18
+stInvalidHandle = 19
+stUnexpectedError = 20
+stInvalidIndex = 21
+stNoSuchObject = 23
+stNotAVariantArray = 24
+stLicensingError = 25
+stUnrecognisedVarName = 26
+stStaticsFailed = 27
+stFileWriteError = 28
+stOperationCancelled = 29
+stSolveEquationFailed = 30
+stInvalidDataName = 31
+stInvalidDataType = 32
+stInvalidDataAccess = 33
+stInvalidVersion = 34
+stInvalidStructureSize = 35
+stRequiredModulesNotEnabled = 36
+stPeriodNotYetStarted = 37
+stCouldNotDestroyObject = 38
+stInvalidModelState = 39
+stSimulationError = 40
+stInvalidModule = 41
+stInvalidResultType = 42
+stInvalidViewParameters = 43
+stCannotExtendSimulation = 44
+stUnrecognisedObjectTypeName = 45
+stUnknownModelState = 46
+stFunctionNotAvailable = 47
+stStructureSizeTooSmall = 48
+stInvalidParameter = 49
+stResponseGraphError = 50
+stResultsNotAvailableWhenNotIncludedInStatics = 51
+stInvalidFileType = 52
+stBatchScriptFailed = 53
+stInvalidTimeHistoryValues = 54
+stResultsNotLogged = 55
+stWizardFailed = 56
+stDLLInitFailed = 57
+stInvalidArclengthRange = 58
+stValueNotAvailable = 59
+stInvalidValue = 60
+stModalAnalysisFailed = 61
+stVesselTypeDataImportFailed = 62
+stOperationNotAvailable = 63
+stFatigueAnalysisFailed = 64
+stExtremeStatisticsFailed = 65
+stTagNotFound = 66
+stInvalidFileFormat = 67
+stThreadAffinityError = 68
+stFileReadParentError = 69
+
+
+@enum.unique
+class ObjectType(enum.IntEnum):
+    General = 1
+    Environment = 3
+    Vessel = 5
+    Line = 6
+    Buoy6D = 7
+    Buoy3D = 8
+    Winch = 9
+    Link = 10
+    Shape = 11
+    Constraint = 12
+    Turbine = 13
+    DragChain = 14
+    LineType = 15
+    ClumpType = 16
+    WingType = 17
+    VesselType = 18
+    DragChainType = 19
+    FlexJointType = 20
+    StiffenerType = 21
+    FlexJoint = 41
+    AttachedBuoy = 43
+    FrictionCoefficients = 47
+    RayleighDampingCoefficients = 48
+    WakeModel = 49
+    PyModel = 50
+    LineContact = 51
+    CodeChecks = 52
+    Shear7Data = 53
+    VIVAData = 54
+    SupportType = 55
+    MorisonElementType = 57
+    ExpansionTable = 58
+    BrowserGroup = 61
+    MultibodyGroup = 62
+    # variable data sources:
+    DragCoefficient = 1000
+    AxialStiffness = 1001
+    BendingStiffness = 1002
+    BendingConnectionStiffness = 1003
+    WingOrientation = 1004
+    KinematicViscosity = 1005
+    FluidTemperature = 1006
+    CurrentSpeed = 1007
+    CurrentDirection = 1008
+    ExternalFunction = 1009
+    HorizontalVariationFactor = 1010
+    LoadForce = 1011
+    LoadMoment = 1012
+    ExpansionFactor = 1013
+    PayoutRate = 1014
+    WinchTension = 1015
+    VerticalVariationFactor = 1016
+    TorsionalStiffness = 1017
+    MinimumBendRadius = 1018
+    LiftCoefficient = 1019
+    LiftCloseToSeabed = 1020
+    DragCloseToSeabed = 1021
+    DragAmplificationFactor = 1022
+    LineTypeDiameter = 1023
+    StressStrainRelationship = 1024
+    CoatingOrLining = 1025
+    ContentsFlowVelocity = 1026
+    AddedMassRateOfChangeCloseToSurface = 1027
+    AddedMassCloseToSurface = 1028
+    ContactStiffness = 1029
+    SupportsStiffness = 1030
+    ConstraintTranslationalStiffness = 1031
+    ConstraintRotationalStiffness = 1032
+    ConstraintTranslationalDamping = 1033
+    ConstraintRotationalDamping = 1034
+    AddedMassCloseToSeabed = 1035
+    SeabedTangentialResistance = 1036
+
+
+# Object type constants (deprecated, use ObjectType)
+otGeneral = 1
+otEnvironment = 3
+otVessel = 5
+otLine = 6
+ot6DBuoy = 7
+ot3DBuoy = 8
+otWinch = 9
+otLink = 10
+otShape = 11
+otConstraint = 12
+otTurbine = 13
+otDragChain = 14
+otLineType = 15
+otClumpType = 16
+otWingType = 17
+otVesselType = 18
+otDragChainType = 19
+otFlexJointType = 20
+otStiffenerType = 21
+otFlexJoint = 41
+otAttachedBuoy = 43
+otFrictionCoefficients = 47
+otSolidFrictionCoefficients = otFrictionCoefficients  # back-compat
+otRayleighDampingCoefficients = 48
+otWakeModel = 49
+otPyModel = 50
+otLineContact = 51
+otCodeChecks = 52
+otShear7Data = 53
+otVIVAData = 54
+otSupportType = 55
+otMorisonElementType = 57
+otExpansionTable = 58
+otBrowserGroup = 61
+otMultibodyGroup = 62
+
+# Object type constants for variable data sources (deprecated, use ObjectType)
+otDragCoefficient = 1000
+otAxialStiffness = 1001
+otBendingStiffness = 1002
+otBendingConnectionStiffness = 1003
+otWingOrientation = 1004
+otKinematicViscosity = 1005
+otFluidTemperature = 1006
+otCurrentSpeed = 1007
+otCurrentDirection = 1008
+otExternalFunction = 1009
+otHorizontalVariationFactor = 1010
+otLoadForce = 1011
+otLoadMoment = 1012
+otExpansionFactor = 1013
+otPayoutRate = 1014
+otWinchPayoutRate = otPayoutRate  # backwards compatibility
+otWinchTension = 1015
+otVerticalVariationFactor = 1016
+otTorsionalStiffness = 1017
+otMinimumBendRadius = 1018
+otLiftCoefficient = 1019
+otLiftCloseToSeabed = 1020
+otDragCloseToSeabed = 1021
+otDragAmplificationFactor = 1022
+otLineTypeDiameter = 1023
+otStressStrainRelationship = 1024
+otCoatingOrLining = 1025
+otContentsFlowVelocity = 1026
+otAddedMassRateOfChangeCloseToSurface = 1027
+otAddedMassCloseToSurface = 1028
+otContactStiffness = 1029
+otSupportsStiffness = 1030
+otConstraintTranslationalStiffness = 1031
+otConstraintRotationalStiffness = 1032
+otConstraintTranslationalDamping = 1033
+otConstraintRotationalDamping = 1034
+otAddedMassCloseToSeabed = 1035
+otSeabedTangentialResistance = 1036
+
+
+# Variable Data Names
+vdnWingAzimuth = "WingAzimuth"
+vdnWingDeclination = "WingDeclination"
+vdnWingGamma = "WingGamma"
+vdnGlobalAppliedForceX = "GlobalAppliedForceX"
+vdnGlobalAppliedForceY = "GlobalAppliedForceY"
+vdnGlobalAppliedForceZ = "GlobalAppliedForceZ"
+vdnGlobalAppliedMomentX = "GlobalAppliedMomentX"
+vdnGlobalAppliedMomentY = "GlobalAppliedMomentY"
+vdnGlobalAppliedMomentZ = "GlobalAppliedMomentZ"
+vdnLocalAppliedForceX = "LocalAppliedForceX"
+vdnLocalAppliedForceY = "LocalAppliedForceY"
+vdnLocalAppliedForceZ = "LocalAppliedForceZ"
+vdnLocalAppliedMomentX = "LocalAppliedMomentX"
+vdnLocalAppliedMomentY = "LocalAppliedMomentY"
+vdnLocalAppliedMomentZ = "LocalAppliedMomentZ"
+vdnRefCurrentSpeed = "RefCurrentSpeed"
+vdnRefCurrentDirection = "RefCurrentDirection"
+vdnWholeSimulationTension = "WholeSimulationTension"
+vdnWholeSimulationPayoutRate = "WholeSimulationPayoutRate"
+vdnXBendStiffness = "xBendStiffness"
+vdnXBendMomentIn = "xBendMomentIn"
+vdnYBendMomentIn = "yBendMomentIn"
+vdnXBendMomentOut = "xBendMomentOut"
+vdnYBendMomentOut = "yBendMomentOut"
+vdnAxialStiffness = "AxialStiffness"
+vdnTorsionalStiffness = "TorsionalStiffness"
+vdnPayoutRate = "PayoutRate"
+vdnExternallyCalculatedPrimaryMotion = "ExternallyCalculatedPrimaryMotion"
+vdnExternallyCalculatedImposedMotion = "ExternallyCalculatedImposedMotion"
+vdnPitchController = "PitchController"
+vdnGeneratorTorqueController = "GeneratorTorqueController"
+vdnGeneratorMotionController = "GeneratorMotionController"
+
+
+@enum.unique
+class PeriodNum(enum.IntEnum):
+    BuildUp = 0
+    # Stage n has Period number n
+    SpecifiedPeriod = 32001
+    LatestWave = 32002
+    WholeSimulation = 32003
+    StaticState = 32004
+    InstantaneousValue = 32005
+
+
+# Period constants (deprecated, use PeriodNum)
+pnBuildUp = 0
+# Stage n has Period number n
+pnSpecifiedPeriod = 32001
+pnLatestWave = 32002
+pnWholeSimulation = 32003
+pnStaticState = 32004
+pnInstantaneousValue = 32005
+
+
+@enum.unique
+class LinePoint(enum.IntEnum):
+    EndA = 0
+    EndB = 1
+    Touchdown = 2
+    NodeNum = 3
+    ArcLength = 4
+
+
+# For ObjectExtra.LinePoint (deprecated, use LinePoint)
+ptEndA = 0
+ptEndB = 1
+ptTouchdown = 2
+ptNodeNum = 3
+ptArcLength = 4
+
+
+@enum.unique
+class RadialPos(enum.IntEnum):
+    Inner = 0
+    Outer = 1
+    Mid = 2
+
+
+# For ObjectExtra.RadialPos (deprecated, use RadialPos)
+rpInner = 0
+rpOuter = 1
+rpMid = 2
+
+# Special integer value equivalent to '~' in OrcaFlex UI
+OrcinaDefaultWord = 65500
+
+
+@enum.unique
+class DataType(enum.IntEnum):
+    Double = 0
+    Integer = 1
+    String = 2
+    Variable = 3
+    IntegerIndex = 4
+    Boolean = 5
+
+
+# DataType constants (deprecated, use DataType)
+dtDouble = 0
+dtInteger = 1
+dtString = 2
+dtVariable = 3
+dtIntegerIndex = 4
+dtBoolean = 5
+
+
+@enum.unique
+class DataAction(enum.IntEnum):
+    IsDefault = 0
+    HasChanged = 1
+    IsMarkedAsChanged = 2
+    SetToDefault = 3
+    SetToOriginalValue = 4
+    MarkAsChanged = 5
+
+
+@enum.unique
+class ResultType(enum.IntEnum):
+    TimeHistory = 0
+    RangeGraph = 1
+    LinkedStatistics = 2
+    FrequencyDomain = 3
+
+
+# For EnumerateVars (deprecated, use ResultType)
+rtTimeHistory = 0
+rtRangeGraph = 1
+rtLinkedStatistics = 2
+rtFrequencyDomain = 3
+
+
+@enum.unique
+class ArclengthRangeMode(enum.IntEnum):
+    EntireRange = 0
+    SpecifiedArclengths = 1
+    SpecifiedSections = 2
+
+
+# For range graph arclength range modes (deprecated, use ArclengthRangeMode)
+armEntireRange = 0
+armEntireLine = armEntireRange  # legacy name
+armSpecifiedArclengths = 1
+armSpecifiedSections = 2
+
+
+@enum.unique
+class MoveSpecifiedBy(enum.IntEnum):
+    Displacement = 0
+    PolarDisplacement = 1
+    NewPosition = 2
+    Rotation = 3
+
+
+# For move objects (deprecated, use MoveSpecifiedBy)
+sbDisplacement = 0
+sbPolarDisplacement = 1
+sbNewPosition = 2
+sbRotation = 3
+
+
+@enum.unique
+class OptionalModule(enum.IntEnum):
+    Dynamics = 0
+    VIV = 1
+
+
+# For module disable/enabled (deprecated, use OptionalModule)
+moduleDynamics = 0
+moduleVIV = 1
+
+
+@enum.unique
+class ModifyModelAction(enum.IntEnum):
+    DeleteUnusedTypes = 0
+    DeleteUnusedVariableDataSources = 1
+
+
+# Modify model actions (deprecated, use ModifyModelAction)
+modifyModelActionDeleteUnusedTypes = 0
+modifyModelActionDeleteUnusedVariableDataSources = 1
+
+
+@enum.unique
+class LicenceReconnectionAction(enum.IntEnum):
+    Begin = 0
+    Continue = 1
+    End = 2
+
+
+# For licence reconnection (deprecated, use LicenceReconnectionAction)
+lrBegin = 0
+lrContinue = 1
+lrEnd = 2
+
+
+@enum.unique
+class TimeHistorySummaryType(enum.IntEnum):
+    SpectralDensity = 0
+    EmpiricalDistribution = 1
+    RainflowHalfCycles = 2
+    RainflowAssociatedMean = 3
+
+
+# For time history summary (deprecated, use TimeHistorySummaryType)
+thstSpectralDensity = 0
+thstEmpiricalDistribution = 1
+thstRainflowHalfCycles = 2
+thstRainflowAssociatedMean = 3
+
+
+@enum.unique
+class GraphicsMode(enum.IntEnum):
+    WireFrame = 0
+    Shaded = 1
+
+
+# For view parameter graphics mode (deprecated, use GraphicsMode)
+gmWireFrame = 0
+gmShaded = 1
+
+
+@enum.unique
+class FillMode(enum.IntEnum):
+    Solid = 0
+    Mesh = 1
+
+
+# For view parameter shaded fill mode (deprecated, use FillMode)
+fmSolid = 0
+fmMesh = 1
+
+
+@enum.unique
+class ExternalFileType(enum.IntEnum):
+    Shear7dat = 0
+    Shear7mds = 1
+    Shear7out = 2
+    Shear7plt = 3
+    Shear7anm = 4
+    Shear7dmg = 5
+    Shear7fat = 6
+    Shear7out1 = 7
+    Shear7out2 = 8
+    Shear7allOutput = 9
+    Shear7str = 10
+    VIVAInput = 11
+    VIVAOutput = 12
+    VIVAModes = 13
+    Shear7cat = 14
+    Shear7inhyst = 15
+    Shear7curv = 16
+    Shear7zetahyst = 17
+    Shear7sth = 18
+    Shear7dth = 19
+
+
+# For saving external program files (deprecated, use ExternalFileType)
+eftShear7dat = 0
+eftShear7mds = 1
+eftShear7out = 2
+eftShear7plt = 3
+eftShear7anm = 4
+eftShear7dmg = 5
+eftShear7fat = 6
+eftShear7out1 = 7
+eftShear7out2 = 8
+eftShear7allOutput = 9
+eftShear7str = 10
+eftVIVAInput = 11
+eftVIVAOutput = 12
+eftVIVAModes = 13
+eftShear7cat = 14
+eftShear7inhyst = 15
+eftShear7curv = 16
+eftShear7zetahyst = 17
+eftShear7sth = 18
+eftShear7dth = 19
+
+
+@enum.unique
+class SpreadsheetType(enum.IntEnum):
+    SummaryResults = 0
+    FullResults = 1
+    WaveSearch = 2
+    VesselDisplacementRAOs = 3
+    VesselSpectralResponse = 4
+    LineClashingReport = 5
+    DetailedProperties = 6
+    LineTypesPropertiesReport = 7
+    CodeChecksProperties = 8
+    SupportGeometryTable = 9
+    AirGapReport = 10
+    DiffractionResults = 11
+    DiffractionMeshDetails = 12
+    DiffractionWaveComponents = 13
+
+
+# For saving spreadsheets (deprecated, use SpreadsheetType)
+sptSummaryResults = 0
+sptFullResults = 1
+sptWaveSearch = 2
+sptVesselDisplacementRAOs = 3
+sptVesselSpectralResponse = 4
+sptLineClashingReport = 5
+sptDetailedProperties = 6
+sptLineTypesPropertiesReport = 7
+sptCodeChecksProperties = 8
+sptSupportGeometryTable = 9
+sptAirGapReport = 10
+sptDiffractionResults = 11
+sptDiffractionMeshDetails = 12
+sptDiffractionWaveComponents = 13
+
+
+@enum.unique
+class BitmapFileFormat(enum.IntEnum):
+    WindowsBitmap = 0
+    PNG = 1
+    GIF = 2
+    JPEG = 3
+    PDF = 4
+    RGB = 5
+
+
+# For view parameter file format (deprecated, use BitmapFileFormat)
+bffWindowsBitmap = 0
+bffPNG = 1
+bffGIF = 2
+bffJPEG = 3
+bffPDF = 4
+bffRGB = 5
+
+
+@enum.unique
+class FrequencyDomainProcessType(enum.IntEnum):
+    Wave = 0
+    Wind = 1
+    WaveDrift = 2
+
+
+# For frequency domain process type (deprecated, use FrequencyDomainProcessType)
+iptWave = 0
+iptWind = 1
+iptWaveDrift = 2
+
+
+@enum.unique
+class ExtremeValueDistribution(enum.IntEnum):
+    Rayleigh = 0
+    Weibull = 1
+    GPD = 2
+
+
+# For extreme statistics (deprecated, use ExtremeValueDistribution)
+evdRayleigh = 0
+evdWeibull = 1
+evdGPD = 2
+
+
+@enum.unique
+class DistributionTail(enum.IntEnum):
+    Upper = 0
+    Lower = 1
+
+
+# For extreme statistics (deprecated, use DistributionTail)
+exUpperTail = 0
+exLowerTail = 1
+
+
+@enum.unique
+class PanelMeshFileFormat(enum.IntEnum):
+    WamitGdf = 0
+    WamitFdf = 1
+    WamitCsf = 2
+    NemohDat = 3
+    HydrostarHst = 4
+    AqwaDat = 5
+    SesamFem = 6
+    GmshMsh = 7
+    WavefrontObj = 8
+
+
+# For panel mesh import (deprecated, use PanelMeshFileFormat)
+mfWamitGdf = 0
+mfWamitFdf = 1
+mfWamitCsf = 2
+mfNemohDat = 3
+mfHydrostarHst = 4
+mfAqwaDat = 5
+mfSesamFem = 6
+mfGmshMsh = 7
+mfWavefrontObj = 8
+
+
+@enum.unique
+class PanelMeshSymmetry(enum.IntEnum):
+    none = 0
+    XZ = 1
+    YZ = 2
+    XZYZ = 3
+
+
+# For panel mesh import (deprecated, use PanelMeshSymmetry)
+msNone = 0
+msXZ = 1
+msYZ = 2
+msXZYZ = 3
+
+
+@enum.unique
+class ExportedMeshType(enum.IntEnum):
+    AutoGeneratedControlSurface = 0
+    AutoGeneratedFreeSurfacePanelledZone = 1
+
+
+@enum.unique
+class WireFrameType(enum.IntEnum):
+    Edges = 0
+    Panels = 1
+
+
+# For panel mesh import to wire frame (deprecated, use WireFrameType)
+wftEdges = 0
+wftPanels = 1
+
+
+@enum.unique
+class PostCalculationActionType(enum.IntEnum):
+    InProcPython = 0
+    CmdScript = 1
+
+
+# For post calculation actions (deprecated, use PostCalculationActionType)
+atInProcPython = 0
+atCmdScript = 1
+
+
+@enum.unique
+class ObjectExtraField(enum.IntEnum):
+    EnvironmentPos = 0
+    LinePoint = 1
+    RadialPos = 2
+    Theta = 3
+    WingName = 4
+    ClearanceLineName = 5
+    WinchConnectionPoint = 6
+    RigidBodyPos = 7
+    ExternalResultText = 8
+    DisturbanceVesselName = 9
+    SupportIndex = 10
+    SupportedLineName = 11
+    BladeIndex = 12
+    ElementIndex = 13
+    SeaSurfaceScalingFactor = 14
+
+
+# Object extra fields, also used by user defined results (deprecated, use ObjectExtraField)
+oefEnvironmentPos = 0
+oefLinePoint = 1
+oefRadialPos = 2
+oefTheta = 3
+oefWingName = 4
+oefClearanceLineName = 5
+oefWinchConnectionPoint = 6
+oefRigidBodyPos = 7
+oefExternalResultText = 8
+oefDisturbanceVesselName = 9
+oefSupportIndex = 10
+oefSupportedLineName = 11
+oefBladeIndex = 12
+oefElementIndex = 13
+oefSeaSurfaceScalingFactor = 14
+
+
+@enum.unique
+class LineResultPoints(enum.IntEnum):
+    none = 0
+    WholeLine = 1
+    Nodes = 2
+    MidSegments = 3
+    MidSegmentsAndEnds = 4
+    Ends = 5
+
+
+# For user defined results, values for LineResultPoints (deprecated, use LineResultPoints)
+lrpNone = 0
+lrpWholeLine = 1
+lrpNodes = 2
+lrpMidSegments = 3
+lrpMidSegmentsAndEnds = 4
+lrpEnds = 5
+
+
+@enum.unique
+class ModeType(enum.IntEnum):
+    NotAvailable = -1
+    Transverse = 0
+    MostlyTransverse = 1
+    Inline = 2
+    MostlyInline = 3
+    Axial = 4
+    MostlyAxial = 5
+    Mixed = 6
+    Rotational = 7
+    MostlyRotational = 8
+
+
+# For modal analysis (deprecated, use ModeType)
+mtNotAvailable = -1
+mtTransverse = 0
+mtMostlyTransverse = 1
+mtInline = 2
+mtMostlyInline = 3
+mtAxial = 4
+mtMostlyAxial = 5
+mtMixed = 6
+mtRotational = 7
+mtMostlyRotational = 8
+
+
+@enum.unique
+class FatigueOutputType(enum.IntEnum):
+    OutputPointCount = 0
+    HomogeneousPipeOutputPointDetails = 1
+    ComponentOutputPointDetails = 2
+    MooringOutputPointDetails = 3
+    Shear7OutputPointDetails = 4
+    HistogramOutputPointDetails = 5
+    Theta = 6
+    DeterministicLoadCaseDamage = 7
+    SpectralLoadCaseDamage = 8
+    Shear7LoadCaseDamage = 9
+    OverallDamage = 10
+    HistogramBins = 11
+    HistogramLoadCaseCycleRate = 12
+    HistogramCombinedCycleRate = 13
+
+
+# For fatigue output (deprecated, use FatigueOutputType)
+fotOutputPointCount = 0
+fotHomogeneousPipeOutputPointDetails = 1
+fotComponentOutputPointDetails = 2
+fotMooringOutputPointDetails = 3
+fotShear7OutputPointDetails = 4
+fotHistogramOutputPointDetails = 5
+fotTheta = 6
+fotDeterministicLoadCaseDamage = 7
+fotSpectralLoadCaseDamage = 8
+fotShear7LoadCaseDamage = 9
+fotOverallDamage = 10
+fotHistogramBins = 11
+fotHistogramLoadCaseCycleRate = 12
+fotHistogramCombinedCycleRate = 13
+
+
+@enum.unique
+class DiffractionOutputType(enum.IntEnum):
+    Headings = 0
+    Frequencies = 1
+    AngularFrequencies = 2
+    Periods = 3
+    PeriodsOrFrequencies = 4
+    HydrostaticResults = 5
+    AddedMass = 6
+    InfiniteFrequencyAddedMass = 7
+    Damping = 8
+    LoadRAOsHaskind = 9
+    LoadRAOsDiffraction = 10
+    DisplacementRAOs = 11
+    MeanDriftHeadingPairs = 12
+    QTFHeadingPairs = 13
+    QTFFrequencies = 14
+    QTFAngularFrequencies = 15
+    QTFPeriods = 16
+    QTFPeriodsOrFrequencies = 17
+    MeanDriftLoadPressureIntegration = 18
+    MeanDriftLoadControlSurface = 19
+    FieldPointPressure = 20
+    FieldPointRAO = 21
+    FieldPointVelocity = 22
+    FieldPointRAOGradient = 23
+    PanelCount = 24
+    PanelGeometry = 25
+    PanelPressure = 26
+    PanelVelocity = 27
+    QuadraticLoadFromPressureIntegration = 28
+    QuadraticLoadFromControlSurface = 29
+    DirectPotentialLoad = 30
+    IndirectPotentialLoad = 31
+    ExtraRollDamping = 32
+    RollDampingPercentCritical = 33
+    PanelPressureDiffraction = 34
+    PanelPressureRadiation = 35
+    PanelVelocityDiffraction = 36
+    PanelVelocityRadiation = 37
+    MeanDriftLoadMomentumConservation = 38
+
+
+# For diffraction output (deprecated, use DiffractionOutputType)
+dotHeadings = 0
+dotFrequencies = 1
+dotAngularFrequencies = 2
+dotPeriods = 3
+dotPeriodsOrFrequencies = 4
+dotHydrostaticResults = 5
+dotAddedMass = 6
+dotInfiniteFrequencyAddedMass = 7
+dotDamping = 8
+dotLoadRAOsHaskind = 9
+dotLoadRAOsDiffraction = 10
+dotDisplacementRAOs = 11
+dotMeanDriftHeadingPairs = 12
+dotQTFHeadingPairs = 13
+dotQTFFrequencies = 14
+dotQTFAngularFrequencies = 15
+dotQTFPeriods = 16
+dotQTFPeriodsOrFrequencies = 17
+dotMeanDriftLoadPressureIntegration = 18
+dotMeanDriftLoadControlSurface = 19
+dotFieldPointPressure = 20
+dotFieldPointRAO = 21
+dotFieldPointVelocity = 22
+dotFieldPointRAOGradient = 23
+dotPanelCount = 24
+dotPanelGeometry = 25
+dotPanelPressure = 26
+dotPanelVelocity = 27
+dotQuadraticLoadFromPressureIntegration = 28
+dotQuadraticLoadFromControlSurface = 29
+dotDirectPotentialLoad = 30
+dotIndirectPotentialLoad = 31
+dotExtraRollDamping = 32
+dotRollDampingPercentCritical = 33
+dotPanelPressureDiffraction = 34
+dotPanelPressureRadiation = 35
+dotPanelVelocityDiffraction = 36
+dotPanelVelocityRadiation = 37
+
+
+@enum.unique
+class ModelPropertyId(enum.IntEnum):
+    IsTimeDomainDynamics = 0
+    IsFrequencyDomainDynamics = 1
+    IsDeterministicFrequencyDomainDynamics = 2
+    GeneralHandle = 3
+    EnvironmentHandle = 4
+    FrictionCoefficientsHandle = 5
+    LineContactHandle = 6
+    CodeChecksHandle = 7
+    Shear7DataHandle = 8
+    VIVADataHandle = 9
+    IsPayoutRateNonZero = 10
+    CanResumeSimulation = 11
+    StageZeroIsBuildUp = 12
+    TargetRestartStateRecordingTimes = 13
+    ActualRestartStateRecordingTimes = 14
+    EulerBucklingLimitExceededForLine = 15
+    EulerBucklingLimitExceededForModel = 16
+
+
+# For vessel type data import
+vdtDisplacementRAOs = 0
+vdtLoadRAOs = 1
+vdtNewmanQTFs = 2
+vdtFullQTFs = 3
+vdtStiffnessAddedMassDamping = 4
+vdtStructure = 5
+vdtOtherDamping = 6
+vdtSeaStateRAOs = 7
+vdtSymmetry = 8
+vdtDrawing = 9
+
+iftGeneric = 0
+iftAQWA = 1
+iftWAMIT = 2
+iftOrcaWave = 3
+
+# Default autosave interval
+DefaultAutoSaveIntervalMinutes = 60  # same as OrcaFlex default
+
+
+def _CheckStatus(status: ctypes.c_int) -> None:
+    if status.value != StatusCode.OK:
+        raise DLLError(StatusCode(status.value))
+
+
+class _DictLookup(object):
+    def __init__(self, value: typing.Mapping):
+        for (k, v) in value.items():
+            setattr(self, k, v)
+
+    def __repr__(self):
+        result = ""
+        for name, value in vars(self).items():
+            result += f"{name!r}: {value!r}, "
+        return "<" + result[0 : len(result) - 2] + ">"
+
+    def __str__(self):
+        result = ""
+        for name, value in vars(self).items():
+            result += f"{name}: {value}, "
+        return "<" + result[0 : len(result) - 2] + ">"
+
+    def asDict(self) -> dict:
+        return dict(vars(self))
+
+
+def objectFromDict(dict: typing.Mapping) -> _DictLookup:
+    return _DictLookup(dict)
+
+
+class DLLError(Exception):
+    def __init__(self, status: StatusCode, errorString: Optional[str] = None) -> None:
+        if errorString is None:
+            length = _GetLastErrorString(None)
+            str = (_char * length)()
+            _GetLastErrorString(str)
+            errorString = str.value
+        self.status = status
+        self.errorString = errorString
+        self.msg = f"\nError code: {status}\n{errorString}"
+
+    def __str__(self):
+        return self.__repr__()
+
+    def __repr__(self):
+        return self.msg
+
+
+class MissingRequirementError(Exception):
+    pass
+
+
+@enum.unique
+class ModelType(enum.IntEnum):
+    Standard = 0
+    Variation = 1
+    Restart = 2
+
+
+@enum.unique
+class ModelState(enum.IntEnum):
+    Reset = 0
+    CalculatingStatics = 1
+    InStaticState = 2
+    RunningSimulation = 3
+    SimulationStopped = 4
+    SimulationStoppedUnstable = 5
+
+
+@enum.unique
+class DiffractionState(enum.IntEnum):
+    Reset = 0
+    Calculating = 1
+    CalculationComplete = 2
+
+
+@enum.unique
+class FileType(enum.IntEnum):
+    DataFile = 0
+    StaticStateSimulationFile = 1
+    DynamicSimulationFile = 2
+
+
+@enum.unique
+class DataFileType(enum.IntEnum):
+    Binary = 0
+    Text = 1
+
+
+@enum.unique
+class SpreadsheetFileType(enum.IntEnum):
+    Csv = 0
+    Tab = 1
+    Xlsx = 2
+
+
+class IndexedDataItem(object):
+
+    __slots__ = "dataName", "obj"
+
+    def __init__(self, dataName: str, obj: "DataObject") -> None:
+        self.dataName = dataName
+        self.obj = obj
+
+    def Assign(self, value: Sequence) -> None:
+        with self.obj.dataChange():
+            count = len(value)
+            if len(self) != count:
+                self.obj.SetDataRowCount(self.dataName, count)
+            for index in range(count):
+                self.obj.SetData(self.dataName, index, value[index])
+
+    def wrappedIndex(self, index: int) -> int:
+        length = len(self)
+        if index < 0:
+            index += length
+        if index < 0 or index >= length:
+            raise IndexError(index)
+        return index
+
+    def sliceCount(self, slice: slice) -> int:
+        start, stop, stride = slice.indices(len(self))
+        # (a > b) - (a < b) is equivalent to cmp(a, b), see https://docs.python.org/3.0/whatsnew/3.0.html#ordering-comparisons
+        return (stop - start + stride + (0 > stride) - (0 < stride)) // stride
+
+    def sliceIndices(self, slice: slice) -> Generator[int, None, None]:
+        start, stop, stride = slice.indices(len(self))
+        if stride > 0:
+
+            def moreItems(index, stop):
+                return index < stop
+
+        else:
+
+            def moreItems(index, stop):
+                return index > stop
+
+        index = start
+        while moreItems(index, stop):
+            yield index
+            index += stride
+
+    def __getitem__(self, index: Union[int, slice]) -> Any:
+        if isinstance(index, slice):
+            return [self.obj.GetData(self.dataName, i) for i in self.sliceIndices(index)]
+        else:
+            return self.obj.GetData(self.dataName, self.wrappedIndex(index))
+
+    def __setitem__(self, index: Union[int, slice], value: Any) -> None:
+        if isinstance(index, slice):
+            if self.sliceCount(index) != len(value):
+                raise ValueError(
+                    f"attempt to assign sequence of size {len(value)} to slice of size {self.sliceCount(index)}"
+                )
+            for i, item in zip(self.sliceIndices(index), value):
+                self.obj.SetData(self.dataName, i, item)
+        else:
+            self.obj.SetData(self.dataName, self.wrappedIndex(index), value)
+
+    def __len__(self) -> int:
+        return self.obj.GetDataRowCount(self.dataName)
+
+    def __repr__(self) -> str:
+        return repr(tuple(self))  # type: ignore [arg-type]
+
+    def DeleteRow(self, index: int) -> None:
+        self.obj.DeleteDataRow(self.dataName, index)
+
+    def InsertRow(self, index: int) -> None:
+        self.obj.InsertDataRow(self.dataName, index)
+
+    @property
+    def rowCount(self) -> int:
+        return self.obj.GetDataRowCount(self.dataName)
+
+    @rowCount.setter
+    def rowCount(self, value: int) -> None:
+        self.obj.SetDataRowCount(self.dataName, value)
+
+
+_tagsBase: Any
+if _supportsGenerics:
+    _tagsBase = MutableMapping[str, str]
+else:
+    _tagsBase = MutableMapping
+
+
+class Tags(_tagsBase):
+    def __init__(self, handle: Handle) -> None:
+        object.__setattr__(self, "__handle__", handle)
+
+    def __getattr__(self, name: str) -> str:
+        result = self.get(name)
+        if result is None:
+            raise AttributeError(name)
+        return result
+
+    def __setattr__(self, name: str, value: str) -> None:
+        self.set(name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if not self.delete(name):
+            raise AttributeError(name)
+
+    def __getitem__(self, name: str) -> str:
+        result = self.get(name)
+        if result is None:
+            raise KeyError(name)
+        return result
+
+    def __setitem__(self, name: str, value: str) -> None:
+        self.set(name, value)
+
+    def __delitem__(self, name: str) -> None:
+        if not self.delete(name):
+            raise KeyError(name)
+
+    def __contains__(self, name) -> bool:
+        handle = self.__handle__
+        status = ctypes.c_int()
+        length = _GetTag(handle, name, None, status)
+        if status.value == StatusCode.TagNotFound:
+            return False
+        _CheckStatus(status)
+        return True
+
+    def __len__(self) -> int:
+        handle = self.__handle__
+        status = ctypes.c_int()
+        result = _GetTagCount(handle, status)
+        _CheckStatus(status)
+        return result
+
+    def __iter__(self):
+        handle = self.__handle__
+        tags = ObjectTags()
+        status = ctypes.c_int()
+        _GetTags(handle, tags, status)
+        _CheckStatus(status)
+        try:
+            for index in range(tags.Count):
+                yield tags.Names[index]
+        finally:
+            # no point checking status here since we can't really do anything about a failure
+            _DestroyTags(tags, status)
+
+    def __str__(self) -> str:
+        return f"tags({dict(self)})"
+
+    def get(self, name: str, default: Optional[str] = None) -> Optional[str]:  # type: ignore [override]
+        handle = self.__handle__
+        status = ctypes.c_int()
+        length = _GetTag(handle, name, None, status)
+        if status.value == StatusCode.TagNotFound:
+            return default
+        _CheckStatus(status)
+        result = (_char * length)()
+        _GetTag(handle, name, result, status)
+        _CheckStatus(status)
+        return _DecodeString(result.value)
+
+    def set(self, name: str, value: str):
+        handle = self.__handle__
+        status = ctypes.c_int()
+        _SetTag(handle, name, value, status)
+        _CheckStatus(status)
+
+    def delete(self, name: str) -> bool:
+        handle = self.__handle__
+        status = ctypes.c_int()
+        _DeleteTag(handle, name, status)
+        if status.value == StatusCode.TagNotFound:
+            return False
+        _CheckStatus(status)
+        return True
+
+    def clear(self) -> None:
+        handle = self.__handle__
+        status = ctypes.c_int()
+        _ClearTags(handle, status)
+        _CheckStatus(status)
+
+
+class PackedStructure(ctypes.Structure):
+
+    _pack_ = 1
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if hasattr(self, "Size"):
+            self.Size = ctypes.sizeof(self)
+
+    def asObject(self) -> _DictLookup:
+        dict = {}
+        for (
+            field,
+            _type,
+        ) in self._fields_:  # _type to avoid name clash with type function
+            if field != "Size":
+                dict[field] = getattr(self, field)
+        return objectFromDict(dict)
+
+    # __eq__ for the benefit of internal unit testing
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, PackedStructure):
+            return NotImplemented
+        for (
+            field,
+            _type,
+        ) in self._fields_:  # _type to avoid name clash with type function
+            value1 = getattr(self, field)
+            value2 = getattr(other, field)
+            if isinstance(value1, ctypes.Array):
+                if value1[:] != value2[:]:
+                    return False
+            elif value1 != value2:
+                return False
+        return True
+
+
+class PackedStructureWithObjectHandles(PackedStructure):
+    @staticmethod
+    def _objectFromHandle(handle: Optional[Handle]) -> Optional["OrcaFlexObject"]:
+        if not handle:
+            return None
+        modelHandle = HelperMethods.GetModelHandle(handle)
+        return HelperMethods.CreateOrcaFlexObject(modelHandle, handle)
+
+    @staticmethod
+    def _handleFromObject(value: Optional["OrcaFlexObject"]) -> Optional[Handle]:
+        if value is None:
+            return None
+        else:
+            return value.handle
+
+
+class CreateModelParams(PackedStructure):
+
+    _fields_ = [("Size", ctypes.c_int), ("ThreadCount", ctypes.c_int)]
+
+
+class NewModelParams(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("ModelType", ctypes.c_int),
+        ("ParentFileName", _pchar),
+    ]
+
+    def __init__(self, modelType: ModelType, parentFileName: Union[str, os.PathLike]):
+        super().__init__()
+        self.ModelType = modelType.value
+        self.ParentFileName = str(parentFileName)
+
+
+class ObjectInfo(PackedStructure):
+
+    _fields_ = [
+        ("ObjectHandle", Handle),
+        ("ObjectType", ctypes.c_int),
+        ("ObjectName", _char * 50),
+    ]
+
+
+class Period(PackedStructure):
+
+    _fields_ = [
+        ("PeriodNum", ctypes.c_int),
+        ("Unused", ctypes.c_int),
+        ("FromTime", ctypes.c_double),
+        ("ToTime", ctypes.c_double),
+    ]
+
+    def __init__(
+        self,
+        PeriodNum: Union[PeriodNum, int],
+        FromTime: float = 0.0,
+        ToTime: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.PeriodNum = PeriodNum
+        self.FromTime = FromTime
+        self.ToTime = ToTime
+
+
+PeriodArg = Union[None, Period, PeriodNum, int, Iterable[float]]
+
+
+def SpecifiedPeriod(FromTime: float = 0.0, ToTime: float = 0.0) -> Period:
+    return Period(PeriodNum.SpecifiedPeriod, FromTime, ToTime)
+
+
+class ObjectExtra(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("EnvironmentPos", ctypes.c_double * 3),
+        ("LinePoint", ctypes.c_int),
+        ("NodeNum", ctypes.c_int),
+        ("ArcLength", ctypes.c_double),
+        ("RadialPos", ctypes.c_int),
+        ("Theta", ctypes.c_double),
+        ("WingName", _pchar),
+        ("ClearanceLineName", _pchar),
+        ("WinchConnectionPoint", ctypes.c_int),
+        ("RigidBodyPos", ctypes.c_double * 3),
+        ("ExternalResultText", _pchar),
+        ("DisturbanceVesselName", _pchar),
+        ("SupportIndex", ctypes.c_int),
+        ("SupportedLineName", _pchar),
+        ("BladeIndex", ctypes.c_int),
+        ("ElementIndex", ctypes.c_int),
+        ("SeaSurfaceScalingFactor", ctypes.c_double),
+    ]
+
+
+def OrcinaDefaultReal() -> float:
+    return _OrcinaDefaultReal()
+
+
+def OrcinaDittoReal() -> float:
+    return _OrcinaDittoReal()
+
+
+def OrcinaInfinity() -> float:
+    return _OrcinaInfinity()
+
+
+def OrcinaUndefinedReal() -> float:
+    return _OrcinaUndefinedReal()
+
+
+def OrcinaNullReal() -> float:
+    return _OrcinaNullReal()
+
+
+def Vector(*args: Any) -> numpy.ndarray:
+    if len(args) == 1:
+        args = args[0]  # assume parameter is iterable
+    if len(args) != 3:
+        raise TypeError("Vector must have length of 3")
+    return numpy.array(args, dtype=numpy.float64)
+
+
+def Vector2(*args: Any) -> numpy.ndarray:
+    if len(args) == 1:
+        args = args[0]  # assume parameter is iterable
+    if len(args) != 2:
+        raise TypeError("Vector2 must have length of 2")
+    return numpy.array(args, dtype=numpy.float64)
+
+
+def oeEnvironment(*args: Any) -> ObjectExtra:
+    result = ObjectExtra()
+    result.EnvironmentPos[:] = Vector(*args)
+    return result
+
+
+def oeRigidBody(*args: float) -> ObjectExtra:
+    result = ObjectExtra()
+    result.RigidBodyPos[:] = Vector(*args)
+    return result
+
+
+oeVessel = oeRigidBody
+
+
+def oeAirGap(RigidBodyPos, SeaSurfaceScalingFactor: float) -> ObjectExtra:
+    result = ObjectExtra()
+    if len(RigidBodyPos) != 3:
+        raise TypeError("RigidBodyPos must have length of 3")
+    result.RigidBodyPos[:] = RigidBodyPos
+    result.SeaSurfaceScalingFactor = SeaSurfaceScalingFactor
+    return result
+
+
+oeBuoy = oeRigidBody
+
+oeConstraint = oeRigidBody
+
+
+def oeWing(WingName: str) -> ObjectExtra:
+    result = ObjectExtra()
+    result.WingName = WingName
+    return result
+
+
+def oeSupport(SupportIndex: int, SupportedLineName: Optional[str] = None) -> ObjectExtra:
+    result = ObjectExtra()
+    result.SupportIndex = SupportIndex
+    result.SupportedLineName = SupportedLineName
+    return result
+
+
+def oeWinch(WinchConnectionPoint: int) -> ObjectExtra:
+    result = ObjectExtra()
+    result.WinchConnectionPoint = WinchConnectionPoint
+    return result
+
+
+def oeLine(
+    LinePoint: LinePoint = LinePoint.ArcLength,
+    NodeNum: int = 0,
+    ArcLength: float = 0.0,
+    RadialPos: RadialPos = RadialPos.Inner,
+    Theta: float = 0.0,
+    ClearanceLineName: Optional[str] = None,
+    ExternalResultText: Optional[str] = None,
+) -> ObjectExtra:
+    result = ObjectExtra()
+    result.LinePoint = LinePoint
+    result.NodeNum = NodeNum
+    result.ArcLength = ArcLength
+    result.RadialPos = RadialPos
+    result.Theta = Theta
+    result.ClearanceLineName = ClearanceLineName
+    result.ExternalResultText = ExternalResultText
+    return result
+
+
+def oeNodeNum(NodeNum: int) -> ObjectExtra:
+    return oeLine(LinePoint=LinePoint.NodeNum, NodeNum=NodeNum)
+
+
+def oeArcLength(ArcLength: float) -> ObjectExtra:
+    return oeLine(LinePoint=LinePoint.ArcLength, ArcLength=ArcLength)
+
+
+oeEndA = oeLine(LinePoint=LinePoint.EndA)
+oeEndB = oeLine(LinePoint=LinePoint.EndB)
+oeTouchdown = oeLine(LinePoint=LinePoint.Touchdown)
+
+
+def oeTurbine(
+    BladeIndex: int, ArcLength: float = 0.0, ClearanceLineName: Optional[str] = None
+) -> ObjectExtra:
+    result = oeLine(
+        LinePoint=LinePoint.ArcLength,
+        ArcLength=ArcLength,
+        ClearanceLineName=ClearanceLineName,
+    )
+    result.BladeIndex = BladeIndex
+    return result
+
+
+def oeTurbineEndA(BladeIndex: int, ClearanceLineName: Optional[str] = None) -> ObjectExtra:
+    result = oeLine(LinePoint=LinePoint.EndA, ClearanceLineName=ClearanceLineName)
+    result.BladeIndex = BladeIndex
+    return result
+
+
+def oeTurbineEndB(BladeIndex: int, ClearanceLineName: Optional[str] = None) -> ObjectExtra:
+    result = oeLine(LinePoint=LinePoint.EndB, ClearanceLineName=ClearanceLineName)
+    result.BladeIndex = BladeIndex
+    return result
+
+
+def oeMorisonElement(ElementIndex: int, ArcLength: float = 0.0) -> ObjectExtra:
+    result = oeLine(LinePoint=LinePoint.ArcLength, ArcLength=ArcLength)
+    result.ElementIndex = ElementIndex
+    return result
+
+
+class RangeGraphCurveNames(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("Min", _char * 30),
+        ("Max", _char * 30),
+        ("Mean", _char * 30),
+        ("StdDev", _char * 30),
+        ("Upper", _char * 30),
+        ("Lower", _char * 30),
+    ]
+
+
+class ArclengthRange(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("Mode", ctypes.c_int),
+        ("FromArclength", ctypes.c_double),
+        ("ToArclength", ctypes.c_double),
+        ("FromSection", ctypes.c_int),
+        ("ToSection", ctypes.c_int),
+    ]
+
+
+def arEntireRange() -> ArclengthRange:
+    result = ArclengthRange()
+    result.Mode = ArclengthRangeMode.EntireRange
+    return result
+
+
+arEntireLine = arEntireRange
+
+
+def arSpecifiedArclengths(FromArclength: float, ToArclength: float) -> ArclengthRange:
+    result = ArclengthRange()
+    result.Mode = ArclengthRangeMode.SpecifiedArclengths
+    result.FromArclength = FromArclength
+    result.ToArclength = ToArclength
+    return result
+
+
+def arSpecifiedSections(FromSection: int, ToSection: int) -> ArclengthRange:
+    result = ArclengthRange()
+    result.Mode = ArclengthRangeMode.SpecifiedSections
+    result.FromSection = FromSection
+    result.ToSection = ToSection
+    return result
+
+
+class MoveObjectPoint(PackedStructureWithObjectHandles):
+
+    _fields_ = [("ObjectHandle", Handle), ("PointIndex", ctypes.c_int)]
+
+    def __init__(self, object: "OrcaFlexObject", pointIndex: int) -> None:
+        super().__init__()
+        self.ObjectHandle = object.handle
+        self.PointIndex = pointIndex
+
+    @property
+    def Object(self) -> Optional["OrcaFlexObject"]:
+        return self._objectFromHandle(self.ObjectHandle)
+
+    @Object.setter
+    def Object(self, value: Optional["OrcaFlexObject"]) -> None:
+        self.ObjectHandle = self._handleFromObject(value)  # type: ignore [assignment]
+
+
+class MoveObjectSpecification(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("MoveSpecifiedBy", ctypes.c_int),
+        ("Displacement", ctypes.c_double * 3),
+        ("PolarDisplacementDirection", ctypes.c_double),
+        ("PolarDisplacementDistance", ctypes.c_double),
+        ("NewPositionReferencePoint", MoveObjectPoint),
+        ("NewPosition", ctypes.c_double * 3),
+        ("RotationAngle", ctypes.c_double),
+        ("RotationCentre", ctypes.c_double * 2),
+    ]
+
+
+class _TimeHistorySpecification(PackedStructure):
+
+    _fields_ = [
+        ("ObjectHandle", Handle),
+        ("ObjectExtra", ctypes.POINTER(ObjectExtra)),
+        ("VarID", ctypes.c_int),
+    ]
+
+
+class _CompoundProperties(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("Mass", ctypes.c_double),
+        ("CentreOfMass", ctypes.c_double * 3),
+        ("MassMomentOfInertia", ctypes.c_double * 9),
+        ("Volume", ctypes.c_double),
+        ("CentreOfVolume", ctypes.c_double * 3),
+    ]
+
+
+class ModesFilesParameters(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("FirstMode", ctypes.c_int),
+        ("LastMode", ctypes.c_int),
+        ("IncludeCoupledObjects", ctypes.wintypes.BOOL),
+    ]
+
+    def __init__(
+        self,
+        firstMode: int = -1,
+        lastMode: int = -1,
+        includeCoupledObjects: bool = False,
+    ) -> None:
+        super().__init__()
+        self.FirstMode = firstMode
+        self.LastMode = lastMode
+        self.IncludeCoupledObjects = includeCoupledObjects
+
+
+Shear7MdsFileParameters = ModesFilesParameters
+VIVAModesFilesParameters = ModesFilesParameters
+
+
+class TimeSeriesStats(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("Mean", ctypes.c_double),
+        ("StdDev", ctypes.c_double),
+        ("m0", ctypes.c_double),
+        ("m2", ctypes.c_double),
+        ("m4", ctypes.c_double),
+        ("Tz", ctypes.c_double),
+        ("Tc", ctypes.c_double),
+        ("Bandwidth", ctypes.c_double),
+    ]
+    if _supportsTimeSeriesStatisticsRMS():
+        _fields_.extend([("RMS", ctypes.c_double)])
+
+
+class FrequencyDomainResults(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("StaticValue", ctypes.c_double),
+        ("StdDev", ctypes.c_double),
+        ("Amplitude", ctypes.c_double),
+        ("PhaseLag", ctypes.c_double),
+        ("m0", ctypes.c_double),
+        ("m1", ctypes.c_double),
+        ("m2", ctypes.c_double),
+        ("m3", ctypes.c_double),
+        ("m4", ctypes.c_double),
+        ("Tz", ctypes.c_double),
+        ("Tc", ctypes.c_double),
+        ("Bandwidth", ctypes.c_double),
+    ]
+
+
+class UseCalculatedPositionsForStaticsParameters(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("SetLinesToUserSpecifiedStartingShape", ctypes.wintypes.BOOL),
+    ]
+
+
+class ViewParameters(PackedStructureWithObjectHandles):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("ViewSize", ctypes.c_double),
+        ("ViewAzimuth", ctypes.c_double),
+        ("ViewElevation", ctypes.c_double),
+        ("ViewCentre", ctypes.c_double * 3),
+        ("Height", ctypes.c_int),
+        ("Width", ctypes.c_int),
+        ("BackgroundColour", ctypes.c_int),
+        ("DrawViewAxes", ctypes.wintypes.BOOL),
+        ("DrawScaleBar", ctypes.wintypes.BOOL),
+        ("DrawGlobalAxes", ctypes.wintypes.BOOL),
+        ("DrawEnvironmentAxes", ctypes.wintypes.BOOL),
+        ("DrawLocalAxes", ctypes.wintypes.BOOL),
+        ("DrawOutOfBalanceForces", ctypes.wintypes.BOOL),
+        ("DrawNodeAxes", ctypes.wintypes.BOOL),
+        ("GraphicsMode", ctypes.c_int),
+        ("FileFormat", ctypes.c_int),
+        ("ViewGamma", ctypes.c_double),
+        ("RelativeToObjectHandle", Handle),
+    ]
+    if _supportsVesselDisturbance():
+        _fields_.extend(
+            [
+                ("DisturbanceVesselHandle", Handle),
+                ("DisturbancePosition", ctypes.c_double * 2),
+            ]
+        )
+    if _supportsShadedFillMode():
+        _fields_.extend([("ShadedFillMode", ctypes.c_int)])
+    if _supportsDrawNameLabels():
+        _fields_.extend(
+            [
+                ("DrawNameLabels", ctypes.wintypes.BOOL),
+                ("DrawConnections", ctypes.wintypes.BOOL),
+                ("LabelScale", ctypes.c_int),
+            ]
+        )
+    if _supportsDrawOrigins():
+        _fields_.extend([("DrawOrigins", ctypes.wintypes.BOOL)])
+    if _supportsJpegCompressionQuality():
+        _fields_.extend(
+            [
+                ("MonochromeOutput", ctypes.wintypes.BOOL),
+                ("AddDetailsToOutput", ctypes.wintypes.BOOL),
+                ("JpegCompressionQuality", ctypes.c_int),
+            ]
+        )
+
+    @property
+    def RelativeToObject(self) -> Optional["OrcaFlexObject"]:
+        return self._objectFromHandle(self.RelativeToObjectHandle)
+
+    @RelativeToObject.setter
+    def RelativeToObject(self, value: Optional["OrcaFlexObject"]) -> None:
+        self.RelativeToObjectHandle = self._handleFromObject(value)
+
+    @property
+    def DisturbanceVessel(self) -> Optional["OrcaFlexObject"]:
+        return self._objectFromHandle(self.DisturbanceVesselHandle)
+
+    @DisturbanceVessel.setter
+    def DisturbanceVessel(self, value: Optional["OrcaFlexObject"]) -> None:
+        self.DisturbanceVesselHandle = self._handleFromObject(value)
+
+
+class BitmapCanvasSaveFormat(PackedStructureWithObjectHandles):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("FileFormat", ctypes.c_int),
+        ("JpegCompressionQuality", ctypes.c_int),
+    ]
+
+    def __init__(self, fileFormat: BitmapFileFormat, jpegCompressionQuality: Optional[int] = None) -> None:
+        super().__init__()
+        self.FileFormat = int(fileFormat)
+        self.JpegCompressionQuality = -1 if jpegCompressionQuality is None else jpegCompressionQuality
+
+
+class AVIFileParameters(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("Codec", ctypes.c_uint32),
+        ("Interval", ctypes.c_double),
+    ]
+
+    def __init__(self, codec: str, interval: float) -> None:
+        super().__init__()
+        assert _Encoding is not None
+        self.Codec = _mmioStringToFOURCCA(str(codec).encode(_Encoding), 0x0010)  # MMIO_TOUPPER = 0x0010
+        self.Interval = float(interval)
+
+
+class VarInfo(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("VarID", ctypes.c_int),
+        ("VarName", _pchar),
+        ("VarUnits", _pchar),
+        ("FullName", _pchar),
+        ("ObjectHandle", Handle),
+    ]
+
+
+class SimulationTimeStatus(PackedStructure):
+
+    _fields_ = [
+        ("StartTime", ctypes.c_double),
+        ("StopTime", ctypes.c_double),
+        ("CurrentTime", ctypes.c_double),
+    ]
+
+
+class TimeSteps(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("InnerTimeStep", ctypes.c_double),
+        ("OuterTimeStep", ctypes.c_double),
+    ]
+
+
+class TimeHistorySummarySpecification(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("SpectralDensityFundamentalFrequency", ctypes.c_double),
+    ]
+
+
+class ObjectTags(PackedStructure):
+
+    _fields_ = [
+        ("Count", ctypes.c_int),
+        ("Names", ctypes.POINTER(_pchar)),
+        ("Values", ctypes.POINTER(_pchar)),
+    ]
+
+
+class RunSimulationParameters(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("EnableAutoSave", ctypes.wintypes.BOOL),
+        ("AutoSaveIntervalMinutes", ctypes.c_int),
+        ("AutoSaveFileName", _pchar),
+    ]
+
+    def __init__(
+        self,
+        enableAutoSave: Optional[bool],
+        autoSaveIntervalMinutes: Optional[int],
+        autoSaveFileName: Optional[str],
+    ) -> None:
+        super().__init__()
+        self.EnableAutoSave = enableAutoSave
+        self.AutoSaveIntervalMinutes = autoSaveIntervalMinutes
+        self.AutoSaveFileName = autoSaveFileName
+
+
+class StatisticsQuery(PackedStructure):
+
+    _fields_ = [
+        ("StdDev", ctypes.c_double),
+        ("Mean", ctypes.c_double),
+        ("TimeOfMax", ctypes.c_double),
+        ("ValueAtMax", ctypes.c_double),
+        ("LinkedValueAtMax", ctypes.c_double),
+        ("TimeOfMin", ctypes.c_double),
+        ("ValueAtMin", ctypes.c_double),
+        ("LinkedValueAtMin", ctypes.c_double),
+    ]
+
+
+class WaveComponent(PackedStructure):
+
+    _fields_ = [
+        ("WaveTrainIndex", ctypes.c_int),
+        ("Frequency", ctypes.c_double),
+        ("FrequencyLowerBound", ctypes.c_double),
+        ("FrequencyUpperBound", ctypes.c_double),
+        ("Amplitude", ctypes.c_double),
+        ("PhaseLagWrtWaveTrainTime", ctypes.c_double),
+        ("PhaseLagWrtSimulationTime", ctypes.c_double),
+        ("WaveNumber", ctypes.c_double),
+        ("Direction", ctypes.c_double),
+    ]
+
+
+class DiffractionWaveComponent(PackedStructure):
+
+    _fields_ = [
+        ("Frequency", ctypes.c_double),
+        ("FrequencyLowerBound", ctypes.c_double),
+        ("FrequencyUpperBound", ctypes.c_double),
+        ("Amplitude", ctypes.c_double),
+        ("WaveNumber", ctypes.c_double),
+        ("Direction", ctypes.c_double),
+    ]
+
+
+class WindComponent(PackedStructure):
+
+    _fields_ = [
+        ("Frequency", ctypes.c_double),
+        ("FrequencyLowerBound", ctypes.c_double),
+        ("FrequencyUpperBound", ctypes.c_double),
+        ("Amplitude", ctypes.c_double),
+        ("PhaseLagWrtWindTime", ctypes.c_double),
+        ("PhaseLagWrtSimulationTime", ctypes.c_double),
+    ]
+
+
+class FrequencyDomainProcessComponent(PackedStructure):
+
+    _fields_ = [
+        ("ProcessType", ctypes.c_int),
+        ("ProcessIndex", ctypes.c_int),
+        ("Frequency", ctypes.c_double),
+        ("FrequencyLowerBound", ctypes.c_double),
+        ("FrequencyUpperBound", ctypes.c_double),
+    ]
+    if _GetFrequencyDomainProcessComponents2Available:
+        _fields_.extend([("PhaseLagWrtSimulationTime", ctypes.c_double)])
+
+
+class _GraphCurve(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("_X", ctypes.POINTER(ctypes.c_double)),
+        ("_Y", ctypes.POINTER(ctypes.c_double)),
+    ]
+
+    def __init__(self, count: int) -> None:
+        super().__init__()
+        self.X = _allocateArray(count)
+        self.Y = _allocateArray(count)
+        self._X = _getArrayData(self.X)
+        self._Y = _getArrayData(self.Y)
+
+    @property
+    def data(self) -> Tuple[numpy.ndarray, numpy.ndarray]:
+        return self.X, self.Y
+
+
+class PanelMeshImportOptions(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("Format", ctypes.c_int),
+        ("Scale", ctypes.c_double),
+        ("BodyNumber", ctypes.c_int),
+        ("ImportDryPanels", ctypes.wintypes.BOOL),
+    ]
+
+    def __init__(
+        self,
+        format: PanelMeshFileFormat,
+        scale: float,
+        bodyNumber: int,
+        importDryPanels: bool,
+    ) -> None:
+        super().__init__()
+        self.Format = format
+        self.Scale = scale
+        self.BodyNumber = bodyNumber
+        self.ImportDryPanels = importDryPanels
+
+
+class LineClashingReportParameters(PackedStructure):
+
+    _fields_ = [("Size", ctypes.c_int), ("Period", Period)]
+
+
+class AirGapReportParameters(PackedStructure):
+
+    _fields_ = [("Size", ctypes.c_int), ("Period", Period)]
+
+
+class VesselTypeDataImportSpecification(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("ImportFileType", ctypes.c_int),
+        ("BodyCount", ctypes.c_int),
+        ("MultibodyGroupName", _pchar),
+        ("ImportDisplacementRAOs", ctypes.wintypes.BOOL),
+        ("ImportLoadRAOs", ctypes.wintypes.BOOL),
+        ("ImportNewmanQTFs", ctypes.wintypes.BOOL),
+        ("ImportFullQTFs", ctypes.wintypes.BOOL),
+        ("ImportStiffnessAddedMassDamping", ctypes.wintypes.BOOL),
+        ("ImportStructure", ctypes.wintypes.BOOL),
+        ("ImportSeaStateRAOs", ctypes.wintypes.BOOL),
+        ("ImportOtherDamping", ctypes.wintypes.BOOL),
+        ("ImportSymmetry", ctypes.wintypes.BOOL),
+        ("ImportDrawing", ctypes.wintypes.BOOL),
+        ("LoadRAOMethod", ctypes.c_int),
+        ("DiagonalQTFMethod", ctypes.c_int),
+        ("FullQTFMethod", ctypes.c_int),
+        ("ClearExistingData", ctypes.wintypes.BOOL),
+    ]
+
+    def __init__(
+        self,
+        fileType,
+        bodyCount,
+        multibodyGroup,
+        requestedData,
+        calculationMethods,
+        clearExistingData,
+    ):
+        @enum.unique
+        class loadRAOMethods(enum.IntEnum):
+            lmDefault = 0
+            lmHaskind = 1
+            lmDiffraction = 2
+
+        @enum.unique
+        class diagonalQTFMethods(enum.IntEnum):
+            qmDefault = 0
+            qmPressureIntegration = 1
+            qmControlSurface = 2
+            qmMomentumConservation = 3
+
+        @enum.unique
+        class fullQTFMethods(enum.IntEnum):
+            fmDefault = 0
+            fmDirect = 1
+            fmIndirect = 2
+
+        super().__init__()
+        self.ImportFileType = fileType
+        self.BodyCount = bodyCount
+        self.MultibodyGroupName = multibodyGroup
+        self.ImportDisplacementRAOs = vdtDisplacementRAOs in requestedData
+        self.ImportLoadRAOs = vdtLoadRAOs in requestedData
+        self.ImportNewmanQTFs = vdtNewmanQTFs in requestedData
+        self.ImportFullQTFs = vdtFullQTFs in requestedData
+        self.ImportStiffnessAddedMassDamping = vdtStiffnessAddedMassDamping in requestedData
+        self.ImportStructure = vdtStructure in requestedData
+        self.ImportSeaStateRAOs = vdtSeaStateRAOs in requestedData
+        self.ImportOtherDamping = vdtOtherDamping in requestedData
+        self.ImportSymmetry = vdtSymmetry in requestedData
+        self.ImportDrawing = vdtDrawing in requestedData
+        self.LoadRAOMethod = loadRAOMethods.lmDefault.value
+        self.DiagonalQTFMethod = diagonalQTFMethods.qmDefault.value
+        self.FullQTFMethod = fullQTFMethods.fmDefault.value
+        self.ClearExistingData = clearExistingData
+        if calculationMethods:
+            for method in calculationMethods:
+                if method in [name for name, member in loadRAOMethods.__members__.items()]:
+                    self.LoadRAOMethod = getattr(loadRAOMethods, method).value
+                if method in [name for name, member in diagonalQTFMethods.__members__.items()]:
+                    self.DiagonalQTFMethod = getattr(diagonalQTFMethods, method).value
+                if method in [name for name, member in fullQTFMethods.__members__.items()]:
+                    self.FullQTFMethod = getattr(fullQTFMethods, method).value
+
+
+class VesselTypeDataGenericImportBodyMap(PackedStructure):
+
+    _fields_ = [
+        ("DraughtName", _pchar),
+        ("RefOrigin", ctypes.c_double * 3),
+        ("RefPhaseOrigin", ctypes.c_double * 3),
+    ]
+
+    def __init__(self, DraughtName, refOrigin=None, refPhaseOrigin=None):
+        super().__init__()
+        self.DraughtName = DraughtName
+        if refOrigin is None:
+            self.RefOrigin[:] = [0.0] * 3
+        else:
+            self.RefOrigin[:] = Vector(refOrigin)
+        if refPhaseOrigin is None:
+            self.RefPhaseOrigin[:] = [OrcinaDefaultReal()] * 3
+        else:
+            self.RefPhaseOrigin[:] = Vector(refPhaseOrigin)
+
+
+class VesselTypeDataGenericImportBodyMapSpecification(PackedStructure):
+
+    _fields_ = [
+        ("DestinationVesselType", _pchar),
+        ("BodyMapList", ctypes.POINTER(VesselTypeDataGenericImportBodyMap)),
+    ]
+
+    def __init__(self, DestinationVesselType, bodyCount):
+        super().__init__()
+        self.DestinationVesselType = DestinationVesselType
+        self.BodyMapList = (VesselTypeDataGenericImportBodyMap * bodyCount)()
+
+
+class VesselTypeDataDiffractionImportBodyMap(PackedStructure):
+
+    _fields_ = [
+        ("Source", _pchar),
+        ("DestinationVesselType", _pchar),
+        ("DestinationDraught", _pchar),
+    ]
+
+    def __init__(self, DestinationVesselType, DestinationDraught):
+        super().__init__()
+        self.DestinationVesselType = DestinationVesselType
+        self.DestinationDraught = DestinationDraught
+
+
+class Interval(PackedStructure):
+
+    _fields_ = [("Lower", ctypes.c_double), ("Upper", ctypes.c_double)]
+
+
+class CycleBin(PackedStructure):
+
+    _fields_ = [("Value", ctypes.c_double), ("Count", ctypes.c_double)]
+
+
+class WaveScatterBin(PackedStructure):
+
+    _fields_ = [
+        ("Value", ctypes.c_double),
+        ("LowerBound", ctypes.c_double),
+        ("UpperBound", ctypes.c_double),
+    ]
+
+
+class WaveScatterAutomationSpecification(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("BatchScriptFileName", _pchar),
+        ("TextDataFilePath", _pchar),
+        ("FatigueAnalysisFileName", _pchar),
+        ("FatigueLoadCaseSimulationPath", _pchar),
+    ]
+
+
+class ExtremeStatisticsSpecification(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("Distribution", ctypes.c_int),
+        ("ExtremesToAnalyse", ctypes.c_int),
+        ("Threshold", ctypes.c_double),
+        ("DeclusterPeriod", ctypes.c_double),
+    ]
+
+
+def RayleighStatisticsSpecification(
+    ExtremesToAnalyse: DistributionTail = DistributionTail.Upper,
+) -> ExtremeStatisticsSpecification:
+    result = ExtremeStatisticsSpecification()
+    result.Distribution = ExtremeValueDistribution.Rayleigh
+    result.ExtremesToAnalyse = ExtremesToAnalyse
+    return result
+
+
+def LikelihoodStatisticsSpecification(
+    Distribution: ExtremeValueDistribution,
+    Threshold: float,
+    DeclusterPeriod: float,
+    ExtremesToAnalyse: DistributionTail = DistributionTail.Upper,
+) -> ExtremeStatisticsSpecification:
+    result = ExtremeStatisticsSpecification()
+    result.Distribution = Distribution
+    result.Threshold = Threshold
+    result.DeclusterPeriod = DeclusterPeriod
+    result.ExtremesToAnalyse = ExtremesToAnalyse
+    return result
+
+
+class ExtremeStatisticsQuery(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("StormDurationHours", ctypes.c_double),
+        ("RiskFactor", ctypes.c_double),
+        ("ConfidenceLevel", ctypes.c_double),
+    ]
+
+
+def RayleighStatisticsQuery(StormDurationHours: float, RiskFactor: float) -> ExtremeStatisticsQuery:
+    result = ExtremeStatisticsQuery()
+    result.StormDurationHours = StormDurationHours
+    result.RiskFactor = RiskFactor
+    return result
+
+
+def LikelihoodStatisticsQuery(StormDurationHours: float, ConfidenceLevel: float) -> ExtremeStatisticsQuery:
+    result = ExtremeStatisticsQuery()
+    result.StormDurationHours = StormDurationHours
+    result.ConfidenceLevel = ConfidenceLevel
+    return result
+
+
+class ExtremeStatisticsOutput(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("MostProbableExtremeValue", ctypes.c_double),
+        ("ExtremeValueWithRiskFactor", ctypes.c_double),
+        ("ReturnLevel", ctypes.c_double),
+        ("ConfidenceInterval", Interval),  # type: ignore [list-item]
+        ("Sigma", ctypes.c_double),
+        ("SigmaStdError", ctypes.c_double),
+        ("Xi", ctypes.c_double),
+        ("XiStdError", ctypes.c_double),
+    ]
+
+
+class ModalAnalysisSpecification(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("CalculateShapes", ctypes.wintypes.BOOL),
+        ("FirstMode", ctypes.c_int),
+        ("LastMode", ctypes.c_int),
+        ("IncludeCoupledObjects", ctypes.wintypes.BOOL),
+        ("AnglesReportedInRadians", ctypes.wintypes.BOOL),
+    ]
+
+    def __init__(
+        self,
+        calculateShapes: bool = True,
+        firstMode: int = -1,
+        lastMode: int = -1,
+        includeCoupledObjects: bool = False,
+        anglesReportedInRadians: bool = False,
+    ) -> None:
+        super().__init__()
+        self.CalculateShapes = calculateShapes
+        self.FirstMode = firstMode
+        self.LastMode = lastMode
+        self.IncludeCoupledObjects = includeCoupledObjects
+        self.AnglesReportedInRadians = anglesReportedInRadians
+
+
+class ModeDetails(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("ModeNumber", ctypes.c_int),
+        ("Period", ctypes.c_double),
+        ("_ShapeWrtGlobal", ctypes.POINTER(ctypes.c_double)),
+        ("_ShapeWrtLocal", ctypes.POINTER(ctypes.c_double)),
+    ]
+    if _supportsModeTypeClassification():
+        _fields_.extend(
+            [
+                ("ModeType", ctypes.c_int),
+                ("PercentageInInlineDirection", ctypes.c_double),
+                ("PercentageInAxialDirection", ctypes.c_double),
+                ("PercentageInTransverseDirection", ctypes.c_double),
+                ("PercentageInRotationalDirection", ctypes.c_double),
+            ]
+        )
+    if _supportsModalMassStiffness():
+        _fields_.extend([("Mass", ctypes.c_double), ("Stiffness", ctypes.c_double)])
+
+    def __init__(self, dofCount: Optional[int] = None) -> None:
+        super().__init__()
+        if dofCount is None:
+            self._ShapeWrtGlobal = None
+            self._ShapeWrtLocal = None
+        else:
+            self.ShapeWrtGlobal = _allocateArray(dofCount)
+            self.ShapeWrtLocal = _allocateArray(dofCount)
+            self._ShapeWrtGlobal = _getArrayData(self.ShapeWrtGlobal)
+            self._ShapeWrtLocal = _getArrayData(self.ShapeWrtLocal)
+
+
+class ModeLoadOutputPoint(PackedStructure):
+
+    _fields_ = [("Owner", Handle), ("Arclength", ctypes.c_double)]
+
+
+class SolveEquationParameters(PackedStructure):
+
+    _fields_ = [
+        ("Size", ctypes.c_int),
+        ("MaxNumberOfIterations", ctypes.c_int),
+        ("Tolerance", ctypes.c_double),
+        ("MaxStep", ctypes.c_double),
+        ("Delta", ctypes.c_double),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        status = ctypes.c_int()
+        _GetDefaultSolveEquationParameters(self, status)
+        _CheckStatus(status)
+
+
+class MemBuffer(PackedStructure):
+
+    _fields_ = [("Handle", Handle), ("Len", ctypes.c_int64)]
+
+
+class GraphCurve(object):
+
+    __slots__ = "X", "Y"
+
+    def __init__(self, X: ArrayLike, Y: ArrayLike) -> None:
+        self.X = _prepareArray(X)
+        self.Y = _prepareArray(Y)
+
+    def __len__(self):
+        return 2
+
+    def __getitem__(self, index):
+        if index == 0:
+            return self.X
+        if index == 1:
+            return self.Y
+        raise IndexError(index)
+
+
+def _CallbackType(restype, *argtypes):
+    def from_param(cls, obj):
+        if obj is None:
+            return obj
+        return ctypes._CFuncPtr.from_param(obj)
+
+    result = ctypes.WINFUNCTYPE(restype, *argtypes)
+    result.from_param = classmethod(from_param)
+    return result
+
+
+# callback types
+_CorrectExternalFileReferencesProc = _CallbackType(None, Handle)
+_DynamicsProgressHandlerProc = _CallbackType(
+    None,
+    Handle,
+    ctypes.c_double,
+    ctypes.c_double,
+    ctypes.c_double,
+    ctypes.POINTER(ctypes.wintypes.BOOL),
+)
+_EnumerateObjectsProc = _CallbackType(None, Handle, ctypes.POINTER(ObjectInfo))
+_EnumerateVarsProc = _CallbackType(None, ctypes.POINTER(VarInfo))
+_LicenceNotFoundHandlerProc = ctypes.WINFUNCTYPE(
+    None,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.wintypes.BOOL),
+    ctypes.POINTER(ctypes.c_void_p),
+)
+_ProgressHandlerProc = _CallbackType(None, Handle, ctypes.c_int, ctypes.POINTER(ctypes.wintypes.BOOL))
+_SolveEquationCalcYProc = _CallbackType(
+    ctypes.c_double, ctypes.c_int, ctypes.c_double, ctypes.POINTER(ctypes.c_int)
+)
+_StringProgressHandlerProc = _CallbackType(None, Handle, _pchar, ctypes.POINTER(ctypes.wintypes.BOOL))
+
+# declare the other functions, after the structure definitions
+_AnalyseExtrema = _bindToOrcFxAPI(
+    "C_AnalyseExtrema",
+    None,
+    DoubleArrayType,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_AssignWireFrameFromPanelMesh = _bindToOrcFxAPI(
+    "C_AssignWireFrameFromPanelMesh",
+    None,
+    Handle,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_double * 3),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_AttachToThread = _bindToOrcFxAPI("C_AttachToThread", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_AVIFileAddBitmap = _bindToOrcFxAPI(
+    "C_AVIFileAddBitmap",
+    None,
+    Handle,
+    ctypes.wintypes.HBITMAP,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_AVIFileFinalise = _bindToOrcFxAPI("C_AVIFileFinalise", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_AVIFileInitialise = _bindToOrcFxAPI(
+    "C_AVIFileInitialiseW",
+    None,
+    ctypes.POINTER(Handle),
+    _pchar,
+    ctypes.POINTER(AVIFileParameters),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_BeginDataChange = _bindToOrcFxAPI("C_BeginDataChange", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_CalculateDiffraction = _bindToOrcFxAPI(
+    "C_CalculateDiffractionW",
+    None,
+    Handle,
+    _StringProgressHandlerProc,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CalculateExtremeStatisticsExcessesOverThreshold = _bindToOrcFxAPI(
+    "C_CalculateExtremeStatisticsExcessesOverThreshold",
+    ctypes.c_int,
+    Handle,
+    ctypes.POINTER(ExtremeStatisticsSpecification),
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CalculateFatigue = _bindToOrcFxAPI(
+    "C_CalculateFatigueW",
+    None,
+    Handle,
+    _pchar,
+    _StringProgressHandlerProc,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CalculateLinkedStatisticsTimeSeriesStatistics = _bindToOrcFxAPI(
+    "C_CalculateLinkedStatisticsTimeSeriesStatistics",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(TimeSeriesStats),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CalculateMooringStiffness = _bindToOrcFxAPI(
+    "C_CalculateMooringStiffness",
+    None,
+    ctypes.c_int,
+    ctypes.POINTER(Handle),
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CalculateRratio = _bindToOrcFxAPI(
+    "C_CalculateRratio",
+    None,
+    ctypes.c_int,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CalculateStatics = _bindToOrcFxAPI(
+    "C_CalculateStaticsW",
+    None,
+    Handle,
+    _StringProgressHandlerProc,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CalculateTimeSeriesStatistics = _bindToOrcFxAPI(
+    "C_CalculateTimeSeriesStatistics",
+    None,
+    DoubleArrayType,
+    ctypes.c_int,
+    ctypes.c_double,
+    ctypes.POINTER(TimeSeriesStats),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_ClearDiffraction = _bindToOrcFxAPI("C_ClearDiffraction", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_ClearModel = _bindToOrcFxAPI("C_ClearModel", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_ClearTags = _bindToOrcFxAPI("C_ClearTags", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_CloseExtremeStatistics = _bindToOrcFxAPI(
+    "C_CloseExtremeStatistics", None, Handle, ctypes.POINTER(ctypes.c_int)
+)
+
+_CloseLinkedStatistics = _bindToOrcFxAPI(
+    "C_CloseLinkedStatistics", None, Handle, ctypes.POINTER(ctypes.c_int)
+)
+
+_CopyBuffer = _bindToOrcFxAPI(
+    "C_CopyBuffer", None, Handle, pbyte, ctypes.c_int64, ctypes.POINTER(ctypes.c_int)
+)
+
+_CreateBitmapCanvas = _bindToOrcFxAPI(
+    "C_CreateBitmapCanvas",
+    None,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CreateClone = _bindToOrcFxAPI(
+    "C_CreateClone", None, Handle, ctypes.POINTER(Handle), ctypes.POINTER(ctypes.c_int)
+)
+
+_CreateClone2 = _bindToOrcFxAPI(
+    "C_CreateClone2",
+    None,
+    Handle,
+    Handle,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CreateClone3 = _bindToOrcFxAPI(
+    "C_CreateClone3",
+    None,
+    Handle,
+    ctypes.c_int,
+    HandleArrayType,
+    Handle,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CreateCollatedResultsAdmin = _bindToOrcFxAPI(
+    "C_CreateCollatedResultsAdmin",
+    None,
+    Handle,
+    ctypes.c_int,
+    IntArrayType,
+    ctypes.POINTER(Period),
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CreateDiffraction = _bindToOrcFxAPI(
+    "C_CreateDiffraction", None, ctypes.POINTER(Handle), ctypes.POINTER(ctypes.c_int)
+)
+
+_CreateFatigue = _bindToOrcFxAPI(
+    "C_CreateFatigue", None, ctypes.POINTER(Handle), ctypes.POINTER(ctypes.c_int)
+)
+
+_CreateCycleHistogramBins = _bindToOrcFxAPI(
+    "C_CreateCycleHistogramBins",
+    None,
+    ctypes.c_int,
+    DoubleArrayType,
+    ctypes.c_double,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.POINTER(CycleBin)),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CreateModel2 = _bindToOrcFxAPI(
+    "C_CreateModel2",
+    None,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(CreateModelParams),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CreateModel3DViewBitmap = _bindToOrcFxAPI(
+    "C_CreateModel3DViewBitmap",
+    None,
+    Handle,
+    ctypes.POINTER(ViewParameters),
+    ctypes.POINTER(ctypes.wintypes.HBITMAP),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CreateModes = _bindToOrcFxAPI(
+    "C_CreateModes",
+    None,
+    Handle,
+    ctypes.POINTER(ModalAnalysisSpecification),
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CreateObject = _bindToOrcFxAPI(
+    "C_CreateObject",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CreatePanelMesh = _bindToOrcFxAPI(
+    "C_CreatePanelMeshW",
+    None,
+    _pchar,
+    ctypes.c_int,
+    ctypes.c_double,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CreatePanelMesh2 = _bindToOrcFxAPI(
+    "C_CreatePanelMesh2W",
+    None,
+    _pchar,
+    ctypes.POINTER(PanelMeshImportOptions),
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CreateTimeHistorySummary = _bindToOrcFxAPI(
+    "C_CreateTimeHistorySummary",
+    None,
+    ctypes.c_int,
+    ctypes.c_int,
+    DoubleArrayType,
+    DoubleArrayType,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CreateTimeHistorySummary2 = _bindToOrcFxAPI(
+    "C_CreateTimeHistorySummary2",
+    None,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.POINTER(TimeHistorySummarySpecification),
+    DoubleArrayType,
+    DoubleArrayType,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_CreateWaveScatter = _bindToOrcFxAPI(
+    "C_CreateWaveScatter", None, ctypes.POINTER(Handle), ctypes.POINTER(ctypes.c_int)
+)
+
+_DataRequiresIndex = _bindToOrcFxAPI(
+    "C_DataRequiresIndexW",
+    None,
+    Handle,
+    _pchar,
+    ctypes.POINTER(ctypes.wintypes.BOOL),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_DefaultInMemoryLogging = _bindToOrcFxAPI(
+    "C_DefaultInMemoryLogging", None, Handle, ctypes.POINTER(ctypes.c_int)
+)
+
+_DeleteDataRow = _bindToOrcFxAPI(
+    "C_DeleteDataRowW", None, Handle, _pchar, ctypes.c_int, ctypes.POINTER(ctypes.c_int)
+)
+
+_DeleteTag = _bindToOrcFxAPI("C_DeleteTagW", None, Handle, _pchar, ctypes.POINTER(ctypes.c_int))
+
+_DestroyBitmapCanvas = _bindToOrcFxAPI(
+    "C_DestroyBitmapCanvas",
+    None,
+    Handle,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_DestroyCollatedResultsAdmin = _bindToOrcFxAPI(
+    "C_DestroyCollatedResultsAdmin", None, Handle, ctypes.POINTER(ctypes.c_int)
+)
+
+_DestroyDiffraction = _bindToOrcFxAPI("C_DestroyDiffraction", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_DestroyFatigue = _bindToOrcFxAPI("C_DestroyFatigue", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_DestroyModel = _bindToOrcFxAPI("C_DestroyModel", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_DestroyModes = _bindToOrcFxAPI("C_DestroyModes", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_DestroyCycleHistogramBins = _bindToOrcFxAPI(
+    "C_DestroyCycleHistogramBins",
+    None,
+    ctypes.POINTER(CycleBin),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_DestroyObject = _bindToOrcFxAPI("C_DestroyObject", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_DestroyPanelMesh = _bindToOrcFxAPI("C_DestroyPanelMesh", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_DestroyTags = _bindToOrcFxAPI(
+    "C_DestroyTagsW", None, ctypes.POINTER(ObjectTags), ctypes.POINTER(ctypes.c_int)
+)
+
+_DestroyTimeHistorySummary = _bindToOrcFxAPI(
+    "C_DestroyTimeHistorySummary", None, Handle, ctypes.POINTER(ctypes.c_int)
+)
+
+_DestroyWaveScatter = _bindToOrcFxAPI("C_DestroyWaveScatter", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_DetachFromThread = _bindToOrcFxAPI("C_DetachFromThread", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_DisableInMemoryLogging = _bindToOrcFxAPI(
+    "C_DisableInMemoryLogging", None, Handle, ctypes.POINTER(ctypes.c_int)
+)
+
+_DisableModule = _bindToOrcFxAPI("C_DisableModule", None, ctypes.c_int, ctypes.POINTER(ctypes.c_int))
+
+_DrawModel3DViewToBitmapCanvas = _bindToOrcFxAPI(
+    "C_DrawModel3DViewToBitmapCanvas",
+    None,
+    Handle,
+    Handle,
+    ctypes.POINTER(ViewParameters),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_EndDataChange = _bindToOrcFxAPI("C_EndDataChange", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_EnumerateObjects = _bindToOrcFxAPI(
+    "C_EnumerateObjectsW",
+    None,
+    Handle,
+    _EnumerateObjectsProc,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_EnumerateVars2 = _bindToOrcFxAPI(
+    "C_EnumerateVars2W",
+    None,
+    Handle,
+    ctypes.POINTER(ObjectExtra),
+    ctypes.c_int,
+    _EnumerateVarsProc,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_EvaluateWaveFrequencySpectrum = _bindToOrcFxAPI(
+    "C_EvaluateWaveFrequencySpectrum",
+    None,
+    Handle,
+    ctypes.c_int,
+    DoubleArrayType,
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_ExchangeObjects = _bindToOrcFxAPI("C_ExchangeObjects", None, Handle, Handle, ctypes.POINTER(ctypes.c_int))
+
+_ExecutePostCalculationActions = _bindToOrcFxAPI(
+    "C_ExecutePostCalculationActionsW",
+    None,
+    Handle,
+    _pchar,
+    _StringProgressHandlerProc,
+    ctypes.c_int,
+    ctypes.wintypes.BOOL,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_ExtendSimulation = _bindToOrcFxAPI(
+    "C_ExtendSimulation", None, Handle, ctypes.c_double, ctypes.POINTER(ctypes.c_int)
+)
+
+_ExternalFunctionPrint = _bindToOrcFxAPI(
+    "C_ExternalFunctionPrintW", None, _pchar, ctypes.POINTER(ctypes.c_int)
+)
+
+_FitExtremeStatistics = _bindToOrcFxAPI(
+    "C_FitExtremeStatistics",
+    None,
+    Handle,
+    ctypes.POINTER(ExtremeStatisticsSpecification),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_ForceInMemoryLogging = _bindToOrcFxAPI("C_ForceInMemoryLogging", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_FreeBuffer = _bindToOrcFxAPI("C_FreeBuffer", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_GetActualRestartStateRecordingTimes = _bindToOrcFxAPI(
+    "C_GetActualRestartStateRecordingTimesW",
+    None,
+    _pchar,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int64),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetBinaryFileType = _bindToOrcFxAPI(
+    "C_GetBinaryFileTypeW",
+    None,
+    _pchar,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetCompoundProperties = _bindToOrcFxAPI(
+    "C_GetCompoundPropertiesW",
+    None,
+    ctypes.c_int,
+    ctypes.POINTER(Handle),
+    Handle,
+    _pchar,
+    ctypes.POINTER(_CompoundProperties),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetDataDouble = _bindToOrcFxAPI(
+    "C_GetDataDoubleW",
+    None,
+    Handle,
+    _pchar,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetDataInteger = _bindToOrcFxAPI(
+    "C_GetDataIntegerW",
+    None,
+    Handle,
+    _pchar,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetDataRowCount = _bindToOrcFxAPI(
+    "C_GetDataRowCountW",
+    None,
+    Handle,
+    _pchar,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetDataString = _bindToOrcFxAPI(
+    "C_GetDataStringW",
+    ctypes.c_int,
+    Handle,
+    _pchar,
+    ctypes.c_int,
+    _pchar,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetDataType = _bindToOrcFxAPI(
+    "C_GetDataTypeW",
+    None,
+    Handle,
+    _pchar,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetDefaultSolveEquationParameters = _bindToOrcFxAPI(
+    "C_GetDefaultSolveEquationParameters",
+    None,
+    ctypes.POINTER(SolveEquationParameters),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetDefaultViewParameters = _bindToOrcFxAPI(
+    "C_GetDefaultViewParameters",
+    None,
+    Handle,
+    ctypes.POINTER(ViewParameters),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetDiffractionOutput = _bindToOrcFxAPI(
+    "C_GetDiffractionOutput",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ByteArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetDiffractionState = _bindToOrcFxAPI(
+    "C_GetDiffractionState",
+    None,
+    Handle,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetDiffractionWaveComponents = _bindToOrcFxAPI(
+    "C_GetDiffractionWaveComponents",
+    None,
+    Handle,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(DiffractionWaveComponent),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetDLLBuildDate = _bindToOrcFxAPI("C_GetDLLBuildDate", ctypes.wintypes.DWORD)
+
+_GetFatigueOutput = _bindToOrcFxAPI(
+    "C_GetFatigueOutput",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ByteArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetFileCreatorVersion = _bindToOrcFxAPI(
+    "C_GetFileCreatorVersionW",
+    ctypes.c_int,
+    _pchar,
+    _pchar,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetFrequencyDomainMPM = _bindToOrcFxAPI(
+    "C_GetFrequencyDomainMPM",
+    None,
+    ctypes.c_double,
+    ctypes.c_double,
+    ctypes.c_double,
+    ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetFrequencyDomainProcessComponents = _bindToOrcFxAPI(
+    "C_GetFrequencyDomainProcessComponents",
+    None,
+    Handle,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(FrequencyDomainProcessComponent),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetFrequencyDomainProcessComponents2 = _bindToOrcFxAPI(
+    "C_GetFrequencyDomainProcessComponents2",
+    None,
+    Handle,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(FrequencyDomainProcessComponent),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetFrequencyDomainResults = _bindToOrcFxAPI(
+    "C_GetFrequencyDomainResultsW",
+    None,
+    Handle,
+    ctypes.POINTER(ObjectExtra),
+    ctypes.c_int,
+    ctypes.POINTER(FrequencyDomainResults),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetFrequencyDomainResultsFromProcess = _bindToOrcFxAPI(
+    "C_GetFrequencyDomainResultsFromProcess",
+    None,
+    Handle,
+    ctypes.c_int,
+    ComplexArrayType,
+    ctypes.POINTER(FrequencyDomainResults),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetFrequencyDomainResultsProcess = _bindToOrcFxAPI(
+    "C_GetFrequencyDomainResultsProcessW",
+    None,
+    Handle,
+    ctypes.POINTER(ObjectExtra),
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ComplexArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetFrequencyDomainSpectralDensityGraph = _bindToOrcFxAPI(
+    "C_GetFrequencyDomainSpectralDensityGraphW",
+    None,
+    Handle,
+    ctypes.POINTER(ObjectExtra),
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(_GraphCurve),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetFrequencyDomainSpectralDensityGraphFromProcess = _bindToOrcFxAPI(
+    "C_GetFrequencyDomainSpectralDensityGraphFromProcess",
+    None,
+    Handle,
+    ctypes.c_int,
+    ComplexArrayType,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(_GraphCurve),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetFrequencyDomainSpectralResponseGraphFromProcess = _bindToOrcFxAPI(
+    "C_GetFrequencyDomainSpectralResponseGraphFromProcess",
+    None,
+    Handle,
+    ctypes.c_int,
+    ComplexArrayType,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(_GraphCurve),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetFrequencyDomainTimeHistoryFromProcess = _bindToOrcFxAPI(
+    "C_GetFrequencyDomainTimeHistoryFromProcess",
+    None,
+    Handle,
+    ctypes.c_int,
+    ComplexArrayType,
+    ctypes.c_double,
+    ctypes.c_double,
+    ctypes.c_int,
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetFrequencyDomainTimeHistorySampleCount = _bindToOrcFxAPI(
+    "C_GetFrequencyDomainTimeHistorySampleCount",
+    None,
+    ctypes.c_double,
+    ctypes.c_double,
+    ctypes.c_double,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetFrequencyDomainTimeHistorySampleTimes = _bindToOrcFxAPI(
+    "C_GetFrequencyDomainTimeHistorySampleTimes",
+    None,
+    ctypes.c_double,
+    ctypes.c_double,
+    ctypes.c_int,
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetLastErrorString = _bindToOrcFxAPI(
+    "C_GetLastErrorStringW",
+    ctypes.c_int,
+    _pchar,
+)
+
+_GetLineResultPoints = _bindToOrcFxAPI(
+    "C_GetLineResultPoints",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetModeDegreeOfFreedomDetails = _bindToOrcFxAPI(
+    "C_GetModeDegreeOfFreedomDetails",
+    None,
+    Handle,
+    IntArrayType,
+    IntArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetModeDegreeOfFreedomOwners = _bindToOrcFxAPI(
+    "C_GetModeDegreeOfFreedomOwners",
+    None,
+    Handle,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetModeDetails = _bindToOrcFxAPI(
+    "C_GetModeDetails",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(ModeDetails),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetModeLoad = _bindToOrcFxAPI(
+    "C_GetModeLoad",
+    None,
+    Handle,
+    ctypes.c_int,
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetModeLoadOutputPoints = _bindToOrcFxAPI(
+    "C_GetModeLoadOutputPoints",
+    None,
+    Handle,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ModeLoadOutputPoint),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetModeSummary = _bindToOrcFxAPI(
+    "C_GetModeSummary",
+    None,
+    Handle,
+    IntArrayType,
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetModelHandle = _bindToOrcFxAPI(
+    "C_GetModelHandle",
+    None,
+    Handle,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetModelProperty = _bindToOrcFxAPI(
+    "C_GetModelProperty",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.c_void_p,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetModelState = _bindToOrcFxAPI(
+    "C_GetModelState",
+    None,
+    Handle,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetModelThreadCount = _bindToOrcFxAPI(
+    "C_GetModelThreadCount", ctypes.c_int, Handle, ctypes.POINTER(ctypes.c_int)
+)
+
+_GetMultipleTimeHistories = _bindToOrcFxAPI(
+    "C_GetMultipleTimeHistoriesW",
+    None,
+    ctypes.c_int,
+    ctypes.POINTER(_TimeHistorySpecification),
+    ctypes.POINTER(Period),
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetMultipleTimeHistoriesCollated = _bindToOrcFxAPI(
+    "C_GetMultipleTimeHistoriesCollatedW",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(_TimeHistorySpecification),
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetNearestNodeArclength = _bindToOrcFxAPI(
+    "C_GetNearestNodeArclength",
+    None,
+    Handle,
+    ctypes.c_double,
+    ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetNodeArclengths = _bindToOrcFxAPI(
+    "C_GetNodeArclengths",
+    None,
+    Handle,
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetNumOfSamples = _bindToOrcFxAPI(
+    "C_GetNumOfSamples",
+    ctypes.c_int,
+    Handle,
+    ctypes.POINTER(Period),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetNumOfSamplesCollated = _bindToOrcFxAPI(
+    "C_GetNumOfSamplesCollated", ctypes.c_int, Handle, ctypes.POINTER(ctypes.c_int)
+)
+
+_GetNumOfWarnings = _bindToOrcFxAPI("C_GetNumOfWarnings", ctypes.c_int, Handle, ctypes.POINTER(ctypes.c_int))
+
+_GetObjectExtraFieldRequired = _bindToOrcFxAPI(
+    "C_GetObjectExtraFieldRequired",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.wintypes.BOOL),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetObjectTypeFromHandle = _bindToOrcFxAPI(
+    "C_GetObjectTypeFromHandle",
+    None,
+    Handle,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetObjectTypeName = _bindToOrcFxAPI(
+    "C_GetObjectTypeNameW",
+    ctypes.c_int,
+    Handle,
+    ctypes.c_int,
+    _pchar,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetPanels = _bindToOrcFxAPI("C_GetPanels", None, Handle, DoubleArrayType, ctypes.POINTER(ctypes.c_int))
+
+_GetRangeGraph3 = _bindToOrcFxAPI(
+    "C_GetRangeGraph3W",
+    None,
+    Handle,
+    ctypes.POINTER(ObjectExtra),
+    ctypes.POINTER(Period),
+    ctypes.c_int,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetRangeGraph4 = _bindToOrcFxAPI(
+    "C_GetRangeGraph4W",
+    None,
+    Handle,
+    ctypes.POINTER(ObjectExtra),
+    ctypes.POINTER(Period),
+    ctypes.POINTER(ArclengthRange),
+    ctypes.c_int,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetRangeGraphCollated = _bindToOrcFxAPI(
+    "C_GetRangeGraphCollatedW",
+    None,
+    Handle,
+    Handle,
+    ctypes.POINTER(ObjectExtra),
+    ctypes.POINTER(ArclengthRange),
+    ctypes.c_int,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetRangeGraphCurveNames = _bindToOrcFxAPI(
+    "C_GetRangeGraphCurveNamesW",
+    None,
+    Handle,
+    ctypes.POINTER(ObjectExtra),
+    ctypes.POINTER(Period),
+    ctypes.c_int,
+    ctypes.POINTER(RangeGraphCurveNames),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetRangeGraphCurveNamesCollated = _bindToOrcFxAPI(
+    "C_GetRangeGraphCurveNamesCollatedW",
+    None,
+    Handle,
+    Handle,
+    ctypes.POINTER(ObjectExtra),
+    ctypes.c_int,
+    ctypes.POINTER(RangeGraphCurveNames),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetRangeGraphNumOfPoints = _bindToOrcFxAPI(
+    "C_GetRangeGraphNumOfPoints",
+    ctypes.c_int,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetRangeGraphNumOfPoints2 = _bindToOrcFxAPI(
+    "C_GetRangeGraphNumOfPoints2",
+    ctypes.c_int,
+    Handle,
+    ctypes.POINTER(ArclengthRange),
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetRangeGraphNumOfPoints3 = _bindToOrcFxAPI(
+    "C_GetRangeGraphNumOfPoints3",
+    ctypes.c_int,
+    Handle,
+    ctypes.POINTER(Period),
+    ctypes.POINTER(ArclengthRange),
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetRangeGraphNumOfPointsCollated = _bindToOrcFxAPI(
+    "C_GetRangeGraphNumOfPointsCollated",
+    ctypes.c_int,
+    Handle,
+    Handle,
+    ctypes.POINTER(ArclengthRange),
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetRecommendedTimeSteps = _bindToOrcFxAPI(
+    "C_GetRecommendedTimeSteps",
+    None,
+    Handle,
+    ctypes.POINTER(TimeSteps),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetRequiredObjectExtraFields = _bindToOrcFxAPI(
+    "C_GetRequiredObjectExtraFields",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetRestartParentFileName = _bindToOrcFxAPI(
+    "C_GetRestartParentFileNameW",
+    None,
+    _pchar,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int64),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetRestartParentFileNames = _bindToOrcFxAPI(
+    "C_GetRestartParentFileNamesW",
+    None,
+    Handle,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int64),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetSampleTimes = _bindToOrcFxAPI(
+    "C_GetSampleTimes",
+    None,
+    Handle,
+    ctypes.POINTER(Period),
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetSampleTimesCollated = _bindToOrcFxAPI(
+    "C_GetSampleTimesCollated",
+    None,
+    Handle,
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetSimulationComplete = _bindToOrcFxAPI(
+    "C_GetSimulationComplete",
+    None,
+    Handle,
+    ctypes.POINTER(ctypes.wintypes.BOOL),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetSimulationDrawTime = _bindToOrcFxAPI(
+    "C_GetSimulationDrawTime", ctypes.c_double, Handle, ctypes.POINTER(ctypes.c_int)
+)
+
+_GetSimulationTimeStatus = _bindToOrcFxAPI(
+    "C_GetSimulationTimeStatus",
+    None,
+    Handle,
+    ctypes.POINTER(SimulationTimeStatus),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetSimulationTimeToGo = _bindToOrcFxAPI(
+    "C_GetSimulationTimeToGo", ctypes.c_double, Handle, ctypes.POINTER(ctypes.c_int)
+)
+
+_GetSpectralResponseGraph = _bindToOrcFxAPI(
+    "C_GetSpectralResponseGraphW",
+    None,
+    Handle,
+    ctypes.POINTER(ObjectExtra),
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(_GraphCurve),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetTag = _bindToOrcFxAPI("C_GetTagW", ctypes.c_int, Handle, _pchar, _pchar, ctypes.POINTER(ctypes.c_int))
+
+_GetTagCount = _bindToOrcFxAPI("C_GetTagCount", ctypes.c_int, Handle, ctypes.POINTER(ctypes.c_int))
+
+_GetTags = _bindToOrcFxAPI(
+    "C_GetTagsW", None, Handle, ctypes.POINTER(ObjectTags), ctypes.POINTER(ctypes.c_int)
+)
+
+_GetTimeHistory2 = _bindToOrcFxAPI(
+    "C_GetTimeHistory2W",
+    None,
+    Handle,
+    ctypes.POINTER(ObjectExtra),
+    ctypes.POINTER(Period),
+    ctypes.c_int,
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetTimeHistoryCollated = _bindToOrcFxAPI(
+    "C_GetTimeHistoryCollatedW",
+    None,
+    Handle,
+    Handle,
+    ctypes.POINTER(ObjectExtra),
+    ctypes.c_int,
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetTimeHistorySummaryValues = _bindToOrcFxAPI(
+    "C_GetTimeHistorySummaryValues",
+    None,
+    Handle,
+    DoubleArrayType,
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetUnitsConversionFactor = _bindToOrcFxAPI(
+    "C_GetUnitsConversionFactorW",
+    None,
+    Handle,
+    _pchar,
+    ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetVariableDataType = _bindToOrcFxAPI(
+    "C_GetVariableDataTypeW",
+    None,
+    Handle,
+    _pchar,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetVarID = _bindToOrcFxAPI(
+    "C_GetVarIDW",
+    None,
+    Handle,
+    _pchar,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetWarningText = _bindToOrcFxAPI(
+    "C_GetWarningTextW",
+    ctypes.c_int,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    _pchar,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetWaveComponents2 = _bindToOrcFxAPI(
+    "C_GetWaveComponents2",
+    None,
+    Handle,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(WaveComponent),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetWaveScatterTable = _bindToOrcFxAPI(
+    "C_GetWaveScatterTable",
+    None,
+    Handle,
+    ctypes.POINTER(WaveScatterBin),
+    ctypes.POINTER(WaveScatterBin),
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_double),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GetWindComponents = _bindToOrcFxAPI(
+    "C_GetWindComponents",
+    None,
+    Handle,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(WindComponent),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GroupGetFirstChild = _bindToOrcFxAPI(
+    "C_GroupGetFirstChild",
+    None,
+    Handle,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GroupGetNextSibling = _bindToOrcFxAPI(
+    "C_GroupGetNextSibling",
+    None,
+    Handle,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GroupGetParent = _bindToOrcFxAPI(
+    "C_GroupGetParent",
+    None,
+    Handle,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GroupGetPrevSibling = _bindToOrcFxAPI(
+    "C_GroupGetPrevSibling",
+    None,
+    Handle,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_GroupMoveAfter = _bindToOrcFxAPI("C_GroupMoveAfter", None, Handle, Handle, ctypes.POINTER(ctypes.c_int))
+
+_GroupMoveBefore = _bindToOrcFxAPI("C_GroupMoveBefore", None, Handle, Handle, ctypes.POINTER(ctypes.c_int))
+
+_GroupSetParent = _bindToOrcFxAPI("C_GroupSetParent", None, Handle, Handle, ctypes.POINTER(ctypes.c_int))
+
+_ImportVesselTypeDataW = _bindToOrcFxAPI(
+    "C_ImportVesselTypeDataW",
+    None,
+    Handle,
+    ctypes.c_wchar_p,
+    ctypes.POINTER(VesselTypeDataImportSpecification),
+    ctypes.c_void_p,
+    ctypes.POINTER(ctypes.c_void_p),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_InsertDataRow = _bindToOrcFxAPI(
+    "C_InsertDataRowW", None, Handle, _pchar, ctypes.c_int, ctypes.POINTER(ctypes.c_int)
+)
+
+_InvokeLineSetupWizard = _bindToOrcFxAPI(
+    "C_InvokeLineSetupWizardW",
+    None,
+    Handle,
+    _StringProgressHandlerProc,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_InvokeWizard = _bindToOrcFxAPI("C_InvokeWizard", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_LoadData = _bindToOrcFxAPI("C_LoadDataW", None, Handle, _pchar, ctypes.POINTER(ctypes.c_int))
+
+_LoadDataMem = _bindToOrcFxAPI(
+    "C_LoadDataMem",
+    None,
+    Handle,
+    ctypes.c_int,
+    pbyte,
+    ctypes.c_int64,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_LoadDiffractionData = _bindToOrcFxAPI(
+    "C_LoadDiffractionDataW", None, Handle, _pchar, ctypes.POINTER(ctypes.c_int)
+)
+
+_LoadDiffractionDataMem = _bindToOrcFxAPI(
+    "C_LoadDiffractionDataMem",
+    None,
+    Handle,
+    ctypes.c_int,
+    pbyte,
+    ctypes.c_int64,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_LoadDiffractionResults = _bindToOrcFxAPI(
+    "C_LoadDiffractionResultsW", None, Handle, _pchar, ctypes.POINTER(ctypes.c_int)
+)
+
+_LoadDiffractionResultsMem = _bindToOrcFxAPI(
+    "C_LoadDiffractionResultsMem",
+    None,
+    Handle,
+    pbyte,
+    ctypes.c_int64,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_LoadFatigue = _bindToOrcFxAPI("C_LoadFatigueW", None, Handle, _pchar, ctypes.POINTER(ctypes.c_int))
+
+_LoadFatigueMem = _bindToOrcFxAPI(
+    "C_LoadFatigueMem",
+    None,
+    Handle,
+    ctypes.c_int,
+    pbyte,
+    ctypes.c_int64,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_LoadSimulation = _bindToOrcFxAPI("C_LoadSimulationW", None, Handle, _pchar, ctypes.POINTER(ctypes.c_int))
+
+_LoadSimulationMem = _bindToOrcFxAPI(
+    "C_LoadSimulationMem",
+    None,
+    Handle,
+    pbyte,
+    ctypes.c_int64,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_LoadWaveScatter = _bindToOrcFxAPI("C_LoadWaveScatterW", None, Handle, _pchar, ctypes.POINTER(ctypes.c_int))
+
+_LoadWaveScatterMem = _bindToOrcFxAPI(
+    "C_LoadWaveScatterMem",
+    None,
+    Handle,
+    ctypes.c_int,
+    pbyte,
+    ctypes.c_int64,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_ModifyModel = _bindToOrcFxAPI("C_ModifyModel", None, Handle, ctypes.c_int, ctypes.POINTER(ctypes.c_int))
+
+_ModuleEnabled = _bindToOrcFxAPI(
+    "C_ModuleEnabled",
+    ctypes.wintypes.BOOL,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_MoveObjects = _bindToOrcFxAPI(
+    "C_MoveObjects",
+    None,
+    ctypes.POINTER(MoveObjectSpecification),
+    ctypes.c_int,
+    ctypes.POINTER(MoveObjectPoint),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_NewDiffraction = _bindToOrcFxAPI(
+    "C_NewDiffractionW",
+    None,
+    Handle,
+    ctypes.POINTER(NewModelParams),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_NewModel = _bindToOrcFxAPI(
+    "C_NewModelW",
+    None,
+    Handle,
+    ctypes.POINTER(NewModelParams),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_ObjectCalled = _bindToOrcFxAPI(
+    "C_ObjectCalledW",
+    None,
+    Handle,
+    _pchar,
+    ctypes.POINTER(ObjectInfo),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_OpenExtremeStatistics = _bindToOrcFxAPI(
+    "C_OpenExtremeStatistics",
+    None,
+    ctypes.c_int,
+    DoubleArrayType,
+    ctypes.c_double,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_OpenLinkedStatistics2 = _bindToOrcFxAPI(
+    "C_OpenLinkedStatistics2W",
+    None,
+    Handle,
+    ctypes.POINTER(ObjectExtra),
+    ctypes.POINTER(Period),
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_PauseSimulation = _bindToOrcFxAPI("C_PauseSimulation", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_PerformDataAction = _bindToOrcFxAPI(
+    "C_PerformDataActionW",
+    None,
+    Handle,
+    _pchar,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_void_p,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_ProcessBatchScript = _bindToOrcFxAPI(
+    "C_ProcessBatchScriptW",
+    None,
+    Handle,
+    _pchar,
+    _StringProgressHandlerProc,
+    _StringProgressHandlerProc,
+    _DynamicsProgressHandlerProc,
+    ctypes.POINTER(RunSimulationParameters),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_QueryExtremeStatistics = _bindToOrcFxAPI(
+    "C_QueryExtremeStatistics",
+    None,
+    Handle,
+    ctypes.POINTER(ExtremeStatisticsQuery),
+    ctypes.POINTER(ExtremeStatisticsOutput),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_QueryLinkedStatistics = _bindToOrcFxAPI(
+    "C_QueryLinkedStatistics",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.POINTER(StatisticsQuery),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_RegisterLicenceNotFoundHandler = _bindToOrcFxAPI(
+    "C_RegisterLicenceNotFoundHandler",
+    None,
+    _LicenceNotFoundHandlerProc,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_RemoveRestartStateFromSimulationFile = _bindToOrcFxAPI(
+    "C_RemoveRestartStateFromSimulationFileW",
+    None,
+    _pchar,
+    ctypes.wintypes.BOOL,
+    ctypes.POINTER(ctypes.c_int64),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_ReportActionProgressW = _bindToOrcFxAPI(
+    "C_ReportActionProgressW",
+    None,
+    Handle,
+    ctypes.c_wchar_p,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_ResetDiffraction = _bindToOrcFxAPI("C_ResetDiffraction", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_ResetModel = _bindToOrcFxAPI("C_ResetModel", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+_RunSimulation2 = _bindToOrcFxAPI(
+    "C_RunSimulation2W",
+    None,
+    Handle,
+    _DynamicsProgressHandlerProc,
+    ctypes.POINTER(RunSimulationParameters),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SaveBitmapCanvasW = _bindToOrcFxAPI(
+    "C_SaveBitmapCanvasW",
+    None,
+    Handle,
+    ctypes.POINTER(BitmapCanvasSaveFormat),
+    _pchar,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SaveBitmapCanvasMem = _bindToOrcFxAPI(
+    "C_SaveBitmapCanvasMem",
+    None,
+    Handle,
+    ctypes.POINTER(BitmapCanvasSaveFormat),
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int64),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SaveData = _bindToOrcFxAPI("C_SaveDataW", None, Handle, _pchar, ctypes.POINTER(ctypes.c_int))
+
+_SaveDataMem = _bindToOrcFxAPI(
+    "C_SaveDataMem",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int64),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SaveDiffractionData = _bindToOrcFxAPI(
+    "C_SaveDiffractionDataW", None, Handle, _pchar, ctypes.POINTER(ctypes.c_int)
+)
+
+_SaveDiffractionDataMem = _bindToOrcFxAPI(
+    "C_SaveDiffractionDataMem",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int64),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SaveDiffractionMesh = _bindToOrcFxAPI(
+    "C_SaveDiffractionMeshW",
+    None,
+    Handle,
+    ctypes.c_int,
+    _pchar,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SaveDiffractionResults = _bindToOrcFxAPI(
+    "C_SaveDiffractionResultsW", None, Handle, _pchar, ctypes.POINTER(ctypes.c_int)
+)
+
+_SaveDiffractionResultsMem = _bindToOrcFxAPI(
+    "C_SaveDiffractionResultsMem",
+    None,
+    Handle,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int64),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SaveExternalProgramFile = _bindToOrcFxAPI(
+    "C_SaveExternalProgramFileW",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.c_void_p,
+    _pchar,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SaveFatigue = _bindToOrcFxAPI("C_SaveFatigueW", None, Handle, _pchar, ctypes.POINTER(ctypes.c_int))
+
+_SaveFatigueMem = _bindToOrcFxAPI(
+    "C_SaveFatigueMem",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int64),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SaveModel3DViewBitmapMem = _bindToOrcFxAPI(
+    "C_SaveModel3DViewBitmapMem",
+    None,
+    Handle,
+    ctypes.POINTER(ViewParameters),
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int64),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SaveModel3DViewBitmapToFile = _bindToOrcFxAPI(
+    "C_SaveModel3DViewBitmapToFileW",
+    None,
+    Handle,
+    ctypes.POINTER(ViewParameters),
+    _pchar,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SaveWaveScatterAutomationFiles = _bindToOrcFxAPI(
+    "C_SaveWaveScatterAutomationFilesW",
+    None,
+    Handle,
+    ctypes.POINTER(WaveScatterAutomationSpecification),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SaveSimulation = _bindToOrcFxAPI("C_SaveSimulationW", None, Handle, _pchar, ctypes.POINTER(ctypes.c_int))
+
+_SaveSimulationMem = _bindToOrcFxAPI(
+    "C_SaveSimulationMem",
+    None,
+    Handle,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int64),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SaveSpreadsheet = _bindToOrcFxAPI(
+    "C_SaveSpreadsheetW",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.c_void_p,
+    _pchar,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SaveSpreadsheetMem = _bindToOrcFxAPI(
+    "C_SaveSpreadsheetMem",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_void_p,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int64),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SaveWaveScatter = _bindToOrcFxAPI("C_SaveWaveScatterW", None, Handle, _pchar, ctypes.POINTER(ctypes.c_int))
+
+_SaveWaveScatterMem = _bindToOrcFxAPI(
+    "C_SaveWaveScatterMem",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(Handle),
+    ctypes.POINTER(ctypes.c_int64),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SetCorrectExternalFileReferencesHandler = _bindToOrcFxAPI(
+    "C_SetCorrectExternalFileReferencesHandler",
+    None,
+    Handle,
+    _CorrectExternalFileReferencesProc,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SetDataDouble = _bindToOrcFxAPI(
+    "C_SetDataDoubleW",
+    None,
+    Handle,
+    _pchar,
+    ctypes.c_int,
+    ctypes.c_double,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SetDataInteger = _bindToOrcFxAPI(
+    "C_SetDataIntegerW",
+    None,
+    Handle,
+    _pchar,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SetDataRowCount = _bindToOrcFxAPI(
+    "C_SetDataRowCountW",
+    None,
+    Handle,
+    _pchar,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SetDataString = _bindToOrcFxAPI(
+    "C_SetDataStringW",
+    None,
+    Handle,
+    _pchar,
+    ctypes.c_int,
+    _pchar,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SetDiffractionProgressHandler = _bindToOrcFxAPI(
+    "C_SetDiffractionProgressHandler",
+    None,
+    Handle,
+    _ProgressHandlerProc,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SetLibraryPolicy = _bindToOrcFxAPI("C_SetLibraryPolicyW", None, _pchar, _pchar, ctypes.POINTER(ctypes.c_int))
+
+_SetModelThreadCount = _bindToOrcFxAPI(
+    "C_SetModelThreadCount", None, Handle, ctypes.c_int, ctypes.POINTER(ctypes.c_int)
+)
+
+_SetProgressHandler = _bindToOrcFxAPI(
+    "C_SetProgressHandler",
+    None,
+    Handle,
+    _ProgressHandlerProc,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SetSimulationDrawTime = _bindToOrcFxAPI(
+    "C_SetSimulationDrawTime",
+    None,
+    Handle,
+    ctypes.c_double,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SetTag = _bindToOrcFxAPI("C_SetTagW", None, Handle, _pchar, _pchar, ctypes.POINTER(ctypes.c_int))
+
+_SimulateToleranceIntervals = _bindToOrcFxAPI(
+    "C_SimulateToleranceIntervals",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.POINTER(Interval),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_SolveEquation = _bindToOrcFxAPI(
+    "C_SolveEquation",
+    None,
+    ctypes.c_void_p,
+    _SolveEquationCalcYProc,
+    ctypes.POINTER(ctypes.c_double),
+    ctypes.c_double,
+    ctypes.POINTER(SolveEquationParameters),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_TranslateDiffractionOutput = _bindToOrcFxAPI(
+    "C_TranslateDiffractionOutput",
+    None,
+    Handle,
+    ctypes.c_int,
+    ctypes.c_int,
+    ByteArrayType,
+    DoubleArrayType,
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_UseCalculatedPositionsForStatics = _bindToOrcFxAPI(
+    "C_UseCalculatedPositionsForStatics",
+    None,
+    Handle,
+    ctypes.POINTER(UseCalculatedPositionsForStaticsParameters),
+    ctypes.POINTER(ctypes.c_int),
+)
+
+_UseStaticLineEndOrientations = _bindToOrcFxAPI(
+    "C_UseStaticLineEndOrientations", None, Handle, ctypes.POINTER(ctypes.c_int)
+)
+
+_UseVirtualLogging = _bindToOrcFxAPI("C_UseVirtualLogging", None, Handle, ctypes.POINTER(ctypes.c_int))
+
+
+def DisableModule(module: OptionalModule):
+    status = ctypes.c_int()
+    _DisableModule(module, status)
+    _CheckStatus(status)
+
+
+class HelperMethods(object):
+
+    # data access indices are 1-based in this class, because OrcFxAPI is 1-based
+
+    @staticmethod
+    def ActualLogSampleInterval(modelHandle: Handle) -> Optional[float]:
+        generalHandle = HelperMethods.GetGeneralHandle(modelHandle)
+        return HelperMethods.GetDataDouble(generalHandle, "ActualLogSampleInterval", 0)
+
+    @staticmethod
+    def CreateOrcaFlexObject(
+        modelHandle: Handle, objectHandle: Handle, _type: Optional[ObjectType] = None
+    ) -> "OrcaFlexObject":
+        if not isinstance(objectHandle, Handle):
+            objectHandle = Handle(objectHandle)
+        if _type is None:
+            _type = HelperMethods.GetObjectTypeFromHandle(modelHandle, objectHandle)
+        return Model.orcaFlexObjectClass(_type)(modelHandle, objectHandle, _type)
+
+    @staticmethod
+    def DataNameValid(handle: Handle, dataName: str) -> bool:
+        dataType = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetDataType(handle, dataName, dataType, status)
+        return status.value == StatusCode.OK
+
+    @staticmethod
+    def FileOperation(handle: Handle, func: Callable[..., None], filename: Union[str, os.PathLike]) -> None:
+        status = ctypes.c_int()
+        func(handle, str(filename), status)
+        _CheckStatus(status)
+
+    @staticmethod
+    def CopyAndFreeBuffer(buffer: Handle, bufferLen: int) -> bytearray:
+        status = ctypes.c_int()
+        result = bytearray(bufferLen)
+        _CopyBuffer(buffer, result, bufferLen, status)
+        _CheckStatus(status)
+        _FreeBuffer(buffer, status)
+        _CheckStatus(status)
+        return result
+
+    @staticmethod
+    def CopyToStringAndFreeBuffer(buffer: Handle, bufferLen: int) -> str:
+        status = ctypes.c_int()
+        bytes = bytearray(bufferLen)
+        _CopyBuffer(buffer, bytes, bufferLen, status)
+        _CheckStatus(status)
+        _FreeBuffer(buffer, status)
+        _CheckStatus(status)
+        return bytes[:-2].decode("utf-16")
+
+    @staticmethod
+    def CopyToStringsAndFreeBuffer(buffer: Handle, bufferLen: int) -> List[str]:
+        status = ctypes.c_int()
+        bytes = bytearray(bufferLen)
+        _CopyBuffer(buffer, bytes, bufferLen, status)
+        _CheckStatus(status)
+        _FreeBuffer(buffer, status)
+        _CheckStatus(status)
+        return bytes[:-4].decode("utf-16").split("\x00")
+
+    @staticmethod
+    def CopyToDoubleArrayAndFreeBuffer(buffer: Handle, bufferLen: int) -> numpy.ndarray:
+        status = ctypes.c_int()
+        values = numpy.empty(bufferLen // 8, dtype=numpy.float64)
+        if bufferLen != 0:
+            _CopyBuffer(buffer, values.ctypes.data_as(pbyte), bufferLen, status)
+            _CheckStatus(status)
+        _FreeBuffer(buffer, status)
+        _CheckStatus(status)
+        return values
+
+    @staticmethod
+    def GetBooleanModelProperty(
+        handle: Handle, propertyId: ModelPropertyId, defaultValue: Optional[bool] = None
+    ) -> bool:
+        result = ctypes.wintypes.BOOL()
+        status = ctypes.c_int()
+        _GetModelProperty(handle, propertyId, ctypes.byref(result), status)
+        if status == StatusCode.InvalidParameter and defaultValue is not None:
+            return defaultValue
+        _CheckStatus(status)
+        return bool(result)
+
+    @staticmethod
+    def GetDoubleArrayModelProperty(
+        handle: Handle, propertyId: ModelPropertyId, defaultValue: Optional[numpy.ndarray] = None
+    ) -> numpy.ndarray:
+        result = MemBuffer()
+        status = ctypes.c_int()
+        _GetModelProperty(handle, propertyId, ctypes.byref(result), status)
+        if status == StatusCode.InvalidParameter and defaultValue is not None:
+            return defaultValue
+        _CheckStatus(status)
+        return HelperMethods.CopyToDoubleArrayAndFreeBuffer(result.Handle, result.Len)
+
+    @staticmethod
+    def PerformDataAction(handle: Handle, dataName: str, index: int, action: DataAction) -> None:
+        index = int(index) + 1  # Python is 0-based, OrcFxAPI is 1-based
+        status = ctypes.c_int()
+        _PerformDataAction(handle, dataName, index, action, None, status)
+        _CheckStatus(status)
+
+    @staticmethod
+    def PerformDataActionGetBool(handle: Handle, dataName: str, index: int, action: DataAction) -> bool:
+        index = int(index) + 1  # Python is 0-based, OrcFxAPI is 1-based
+        status = ctypes.c_int()
+        result = ctypes.wintypes.BOOL()
+        _PerformDataAction(handle, dataName, index, action, ctypes.byref(result), status)
+        _CheckStatus(status)
+        return bool(result)
+
+    @staticmethod
+    def PerformDataActionSetBool(
+        handle: Handle, dataName: str, index: int, action: DataAction, value: bool
+    ) -> None:
+        index = int(index) + 1  # Python is 0-based, OrcFxAPI is 1-based
+        status = ctypes.c_int()
+        _PerformDataAction(
+            handle,
+            dataName,
+            index,
+            action,
+            ctypes.byref(ctypes.wintypes.BOOL(value)),
+            status,
+        )
+        _CheckStatus(status)
+
+    @staticmethod
+    def GetDataDouble(handle: Handle, dataName: str, index: int) -> Optional[float]:
+        result = ctypes.c_double()
+        status = ctypes.c_int()
+        _GetDataDouble(handle, dataName, index, result, status)
+        if status.value == StatusCode.ValueNotAvailable:
+            return None
+        _CheckStatus(status)
+        return result.value
+
+    @staticmethod
+    def GetDataDoubleNotNone(handle: Handle, dataName: str, index: int) -> float:
+        result = HelperMethods.GetDataDouble(handle, dataName, index)
+        assert result is not None
+        return result
+
+    @staticmethod
+    def GetDataInteger(handle: Handle, dataName: str, index: int) -> Optional[int]:
+        result = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetDataInteger(handle, dataName, index, result, status)
+        if status.value == StatusCode.ValueNotAvailable:
+            return None
+        _CheckStatus(status)
+        return result.value
+
+    @staticmethod
+    def GetDataIntegerNotNone(handle: Handle, dataName: str, index: int) -> int:
+        result = HelperMethods.GetDataInteger(handle, dataName, index)
+        assert result is not None
+        return result
+
+    @staticmethod
+    def GetDataString(handle: Handle, dataName: str, index: int) -> Optional[str]:
+        status = ctypes.c_int()
+        length = _GetDataString(handle, dataName, index, None, status)
+        if status.value == StatusCode.ValueNotAvailable:
+            return None
+        _CheckStatus(status)
+        result = (_char * length)()
+        _GetDataString(handle, dataName, index, result, status)
+        _CheckStatus(status)
+        return _DecodeString(result.value)
+
+    @staticmethod
+    def GetDataStringNotNone(handle: Handle, dataName: str, index: int) -> str:
+        result = HelperMethods.GetDataString(handle, dataName, index)
+        assert result is not None
+        return result
+
+    @staticmethod
+    def GetDataBoolean(handle: Handle, dataName: str, index: int) -> Optional[bool]:
+        dataType = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetDataType(handle, dataName, dataType, status)
+        _CheckStatus(status)
+        if dataType.value == DataType.String:
+            length = _GetDataString(handle, dataName, index, None, status)
+            if status.value == StatusCode.ValueNotAvailable:
+                return None
+            _CheckStatus(status)
+            result = (_char * length)()
+            _GetDataString(handle, dataName, index, result, status)
+            _CheckStatus(status)
+            value = _DecodeString(result.value)
+            result = value == "Yes"
+            if not result and value != "No":
+                raise DLLError(StatusCode.InvalidDataType, dataName + " is not a boolean data item")
+            return result
+        elif dataType.value == DataType.Boolean:
+            result = ctypes.c_int()
+            _GetDataInteger(handle, dataName, index, result, status)
+            if status.value == StatusCode.ValueNotAvailable:
+                return None
+            _CheckStatus(status)
+            return result.value != 0
+        else:
+            raise DLLError(StatusCode.InvalidDataType, dataName + " is not a boolean data item")
+
+    @staticmethod
+    def GetDataBooleanNotNone(handle: Handle, dataName: str, index: int) -> bool:
+        result = HelperMethods.GetDataBoolean(handle, dataName, index)
+        assert result is not None
+        return result
+
+    @staticmethod
+    def SetDataString(handle: Handle, dataName: str, index: int, value: str) -> None:
+        status = ctypes.c_int()
+        _SetDataString(handle, dataName, index, value, status)
+        _CheckStatus(status)
+
+    @staticmethod
+    def SetDataBoolean(handle: Handle, dataName: str, index: int, value: bool) -> None:
+        dataType = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetDataType(handle, dataName, dataType, status)
+        _CheckStatus(status)
+        if dataType.value == DataType.String:
+            _SetDataString(
+                handle,
+                dataName,
+                index,
+                "Yes" if value else "No",
+                status,
+            )
+            _CheckStatus(status)
+        elif dataType.value == DataType.Boolean:
+            _SetDataInteger(handle, dataName, index, ctypes.c_int(value), status)
+            _CheckStatus(status)
+        else:
+            raise DLLError(StatusCode.InvalidDataType, dataName + " is not a boolean data item")
+
+    @staticmethod
+    def GetGeneralHandle(modelHandle: Handle) -> Handle:
+        if _supportsGetModelProperty():
+            status = ctypes.c_int()
+            result = Handle()
+            _GetModelProperty(modelHandle, ModelPropertyId.GeneralHandle, ctypes.byref(result), status)
+            if status.value == StatusCode.OK:
+                return result
+
+        return HelperMethods.ObjectCalled(modelHandle, "General").ObjectHandle
+
+    @staticmethod
+    def GetEnvironmentHandle(modelHandle: Handle) -> Handle:
+        if _supportsGetModelProperty():
+            status = ctypes.c_int()
+            result = Handle()
+            _GetModelProperty(
+                modelHandle,
+                ModelPropertyId.EnvironmentHandle,
+                ctypes.byref(result),
+                status,
+            )
+            if status.value == StatusCode.OK:
+                return result
+
+        return HelperMethods.ObjectCalled(modelHandle, "Environment").ObjectHandle
+
+    @staticmethod
+    def GetModelHandle(objectHandle: Handle) -> Handle:
+        modelHandle = Handle()
+        status = ctypes.c_int()
+        _GetModelHandle(objectHandle, modelHandle, status)
+        _CheckStatus(status)
+        return modelHandle
+
+    @staticmethod
+    def GetModelState(modelHandle: Handle) -> ModelState:
+        state = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetModelState(modelHandle, state, status)
+        _CheckStatus(status)
+        return ModelState(state.value)
+
+    @staticmethod
+    def GetModelThreadCount(handle: Handle) -> int:
+        status = ctypes.c_int()
+        result = _GetModelThreadCount(handle, status)
+        _CheckStatus(status)
+        return result
+
+    @staticmethod
+    def GetObjectTypeFromHandle(modelHandle: Handle, handle: Handle) -> ObjectType:
+        if _GetObjectTypeFromHandleAvailable:
+            status = ctypes.c_int()
+            result = ctypes.c_int()
+            _GetObjectTypeFromHandle(handle, result, status)
+            _CheckStatus(status)
+            return ObjectType(result.value)
+        else:
+            objectInfo = HelperMethods.FindObjectFromHandle(modelHandle, handle)
+            return ObjectType(objectInfo.ObjectType)
+
+    @staticmethod
+    def GetSimulationTimeStatus(modelHandle: Handle) -> SimulationTimeStatus:
+        result = SimulationTimeStatus()
+        status = ctypes.c_int()
+        _GetSimulationTimeStatus(modelHandle, result, status)
+        _CheckStatus(status)
+        return result
+
+    @staticmethod
+    def GetSimulationStartTime(modelHandle: Handle) -> float:
+        return HelperMethods.GetSimulationTimeStatus(modelHandle).StartTime
+
+    @staticmethod
+    def GetSpectralDensityFundamentalFrequency(modelHandle: Handle) -> Optional[float]:
+        generalHandle = HelperMethods.GetGeneralHandle(modelHandle)
+        if HelperMethods.DataNameValid(generalHandle, "SpectralDensityFundamentalFrequency"):
+            return HelperMethods.GetDataDouble(generalHandle, "SpectralDensityFundamentalFrequency", 0)
+        return None
+
+    @staticmethod
+    def IsTimeDomainDynamics(modelHandle: Handle) -> bool:
+        return not _supportsGetModelProperty() or HelperMethods.GetBooleanModelProperty(
+            modelHandle, ModelPropertyId.IsTimeDomainDynamics
+        )
+
+    @staticmethod
+    def IsFrequencyDomainDynamics(modelHandle: Handle) -> bool:
+        return _supportsGetModelProperty() and HelperMethods.GetBooleanModelProperty(
+            modelHandle, ModelPropertyId.IsFrequencyDomainDynamics
+        )
+
+    @staticmethod
+    def IsDeterministicFrequencyDomainDynamics(modelHandle: Handle) -> bool:
+        return _supportsGetModelProperty() and HelperMethods.GetBooleanModelProperty(
+            modelHandle, ModelPropertyId.IsDeterministicFrequencyDomainDynamics
+        )
+
+    @staticmethod
+    def IsFrequencyDomainResult(modelHandle: Handle, period: Period) -> bool:
+        return (
+            HelperMethods.IsFrequencyDomainDynamics(modelHandle) and period.PeriodNum != PeriodNum.StaticState
+        )
+
+    @staticmethod
+    def IsLinePayoutNonZero(lineHandle: Handle) -> bool:
+        return _supportsLineFeeding() and HelperMethods.GetBooleanModelProperty(
+            lineHandle, ModelPropertyId.IsPayoutRateNonZero
+        )
+
+    @staticmethod
+    def CanResumeSimulation(objectHandle: Handle) -> bool:
+        return not _supportsGetModelProperty() or HelperMethods.GetBooleanModelProperty(
+            objectHandle, ModelPropertyId.CanResumeSimulation, True
+        )
+
+    @staticmethod
+    def StageZeroIsBuildUp(objectHandle: Handle) -> bool:
+        return not _supportsGetModelProperty() or HelperMethods.GetBooleanModelProperty(
+            objectHandle, ModelPropertyId.StageZeroIsBuildUp, True
+        )
+
+    @staticmethod
+    def ModeLoadOutputPointCount(handle: Handle) -> int:
+        result = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetModeLoadOutputPoints(handle, result, None, status)
+        _CheckStatus(status)
+        return result.value
+
+    @staticmethod
+    def FindObjectFromHandle(modelHandle: Handle, handle: Handle) -> ObjectInfo:
+        result = ObjectInfo()
+
+        def callback(modelHandle, objectInfo):
+            if objectInfo[0].ObjectHandle == handle.value:
+                # clone objectInfo, see http://stackoverflow.com/q/1470343/
+                ctypes.pointer(result)[0] = objectInfo[0]
+
+        status = ctypes.c_int()
+        _EnumerateObjects(modelHandle, _EnumerateObjectsProc(callback), ctypes.c_int(), status)
+        _CheckStatus(status)
+        return result
+
+    @staticmethod
+    def FrequencyDomainResults(handle: Handle, varID: int, objectExtra: Optional[ObjectExtra]) -> _DictLookup:
+        result = FrequencyDomainResults()
+        status = ctypes.c_int()
+        _GetFrequencyDomainResults(handle, objectExtra, varID, result, status)
+        _CheckStatus(status)
+        return result.asObject()
+
+    @staticmethod
+    def FrequencyDomainResultsProcess(
+        handle: Handle, varID: int, objectExtra: Optional[ObjectExtra]
+    ) -> numpy.ndarray:
+        componentCount = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetFrequencyDomainResultsProcess(handle, objectExtra, varID, componentCount, None, status)
+        _CheckStatus(status)
+        process = numpy.empty(componentCount.value, dtype=numpy.complex128)
+        _GetFrequencyDomainResultsProcess(handle, objectExtra, varID, componentCount, process, status)
+        _CheckStatus(status)
+        return process
+
+    @staticmethod
+    def FrequencyDomainTimeHistorySampleInterval(
+        modelHandle: Handle,
+    ) -> Optional[float]:
+        generalHandle = HelperMethods.GetGeneralHandle(modelHandle)
+        return HelperMethods.GetDataDouble(generalHandle, "FrequencyDomainSampleInterval", 0)
+
+    @staticmethod
+    def FrequencyDomainSampleCount(
+        modelHandle: Handle, period: PeriodArg, sampleInterval: Optional[float]
+    ) -> int:
+        fromTime, toTime = HelperMethods.PrepareFrequencyDomainPeriod(modelHandle, period)
+        if sampleInterval is None:
+            sampleInterval = HelperMethods.FrequencyDomainTimeHistorySampleInterval(modelHandle)
+        sampleCount = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetFrequencyDomainTimeHistorySampleCount(fromTime, toTime, sampleInterval, sampleCount, status)
+        _CheckStatus(status)
+        return sampleCount.value
+
+    @staticmethod
+    def FrequencyDomainSampleTimes(
+        modelHandle: Handle, period: PeriodArg, sampleInterval: Optional[float]
+    ) -> numpy.ndarray:
+        fromTime, toTime = HelperMethods.PrepareFrequencyDomainPeriod(modelHandle, period)
+        if sampleInterval is None:
+            sampleInterval = HelperMethods.FrequencyDomainTimeHistorySampleInterval(modelHandle)
+        sampleCount = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetFrequencyDomainTimeHistorySampleCount(fromTime, toTime, sampleInterval, sampleCount, status)
+        _CheckStatus(status)
+        values = _allocateArray(sampleCount.value)
+        _GetFrequencyDomainTimeHistorySampleTimes(fromTime, sampleInterval, sampleCount, values, status)
+        _CheckStatus(status)
+        return values
+
+    @staticmethod
+    def TimeDomainSampleCount(modelHandle: Handle, period: PeriodArg) -> int:
+        period = HelperMethods.PreparePeriod(modelHandle, period)
+        status = ctypes.c_int()
+        sampleCount = _GetNumOfSamples(modelHandle, period, status)
+        _CheckStatus(status)
+        return sampleCount
+
+    @staticmethod
+    def TimeDomainSampleTimes(modelHandle: Handle, period: PeriodArg) -> numpy.ndarray:
+        period = HelperMethods.PreparePeriod(modelHandle, period)
+        status = ctypes.c_int()
+        sampleCount = _GetNumOfSamples(modelHandle, period, status)
+        _CheckStatus(status)
+        samples = _allocateArray(sampleCount)
+        _GetSampleTimes(modelHandle, period, samples, status)
+        _CheckStatus(status)
+        return samples
+
+    @staticmethod
+    def SampleCount(modelHandle: Handle, period: PeriodArg) -> int:
+        period = HelperMethods.PreparePeriod(modelHandle, period)
+        if HelperMethods.IsFrequencyDomainResult(modelHandle, period):
+            return HelperMethods.FrequencyDomainSampleCount(modelHandle, period, None)
+        else:
+            return HelperMethods.TimeDomainSampleCount(modelHandle, period)
+
+    @staticmethod
+    def SampleTimes(modelHandle: Handle, period: PeriodArg) -> numpy.ndarray:
+        period = HelperMethods.PreparePeriod(modelHandle, period)
+        if HelperMethods.IsFrequencyDomainResult(modelHandle, period):
+            return HelperMethods.FrequencyDomainSampleTimes(modelHandle, period, None)
+        else:
+            return HelperMethods.TimeDomainSampleTimes(modelHandle, period)
+
+    @staticmethod
+    def RangeGraphPointCount(
+        handle: Handle,
+        type: ObjectType,
+        varID: int,
+        arclengthRange: Optional[ArclengthRange],
+        period: PeriodArg,
+    ):
+        status = ctypes.c_int()
+        if ImportedFunctionAvailable(_GetRangeGraphNumOfPoints3):
+            pointCount = _GetRangeGraphNumOfPoints3(handle, period, arclengthRange, varID, status)
+        elif (
+            type == ObjectType.Line
+            and HelperMethods.IsLinePayoutNonZero(handle)
+            and arclengthRange is not None
+            and arclengthRange.Mode != ArclengthRangeMode.EntireRange
+        ):
+            raise ValueError(
+                "Range graphs cannot be obtained for a given arclength range when the payout rate is non-zero in this version of OrcFxAPI.dll"
+            )
+        elif ImportedFunctionAvailable(_GetRangeGraphNumOfPoints2):
+            pointCount = _GetRangeGraphNumOfPoints2(
+                handle, arclengthRange, varID, status
+            )  # support 10.2 and earlier
+        else:
+            pointCount = _GetRangeGraphNumOfPoints(handle, varID, status)  # support 9.1 and earlier
+        _CheckStatus(status)
+        return pointCount
+
+    @staticmethod
+    def FrequencyDomainTimeHistoryFromProcess(
+        modelHandle: Handle,
+        process: numpy.ndarray,
+        period: PeriodArg,
+        sampleInterval: Optional[float],
+    ) -> numpy.ndarray:
+        fromTime, toTime = HelperMethods.PrepareFrequencyDomainPeriod(modelHandle, period)
+        if sampleInterval is None:
+            sampleInterval = HelperMethods.FrequencyDomainTimeHistorySampleInterval(modelHandle)
+        sampleCount = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetFrequencyDomainTimeHistorySampleCount(fromTime, toTime, sampleInterval, sampleCount, status)
+        _CheckStatus(status)
+        values = _allocateArray(sampleCount.value)
+        process, length = HelperMethods.PrepareProcess(process)
+        _GetFrequencyDomainTimeHistoryFromProcess(
+            modelHandle,
+            length,
+            process,
+            fromTime,
+            sampleInterval,
+            sampleCount,
+            values,
+            status,
+        )
+        _CheckStatus(status)
+        return values
+
+    @staticmethod
+    def FrequencyDomainTimeHistory(
+        modelHandle: Handle,
+        handle: Handle,
+        varID: int,
+        period: PeriodArg,
+        objectExtra: ObjectExtra,
+        sampleInterval: Optional[float],
+    ) -> numpy.ndarray:
+        process = HelperMethods.FrequencyDomainResultsProcess(handle, varID, objectExtra)
+        values = HelperMethods.FrequencyDomainTimeHistoryFromProcess(
+            modelHandle, process, period, sampleInterval
+        )
+        staticValue = HelperMethods.TimeDomainTimeHistory(
+            modelHandle, handle, varID, PeriodNum.StaticState, objectExtra
+        )
+        return values + staticValue
+
+    @staticmethod
+    def TimeDomainTimeHistory(
+        modelHandle: Handle,
+        handle: Handle,
+        varID: int,
+        period: PeriodArg,
+        objectExtra: ObjectExtra,
+    ) -> numpy.ndarray:
+        period = HelperMethods.PreparePeriod(modelHandle, period)
+        status = ctypes.c_int()
+        sampleCount = _GetNumOfSamples(modelHandle, period, status)
+        _CheckStatus(status)
+        values = _allocateArray(sampleCount)
+        _GetTimeHistory2(handle, objectExtra, period, varID, values, status)
+        _CheckStatus(status)
+        return values
+
+    @staticmethod
+    def PrepareFrequencyDomainPeriod(modelHandle: Handle, period: PeriodArg) -> Tuple[float, float]:
+        period = HelperMethods.PreparePeriod(modelHandle, period)
+        if period.PeriodNum != PeriodNum.SpecifiedPeriod:
+            raise ValueError("must use specified period for frequency domain time history synthesis")
+        return period.FromTime, period.ToTime
+
+    @staticmethod
+    def PreparePeriod(modelHandle: Optional[Handle], period: PeriodArg) -> Period:
+        if isinstance(period, Period):
+            return period
+        elif period is None:
+            assert modelHandle is not None
+            if HelperMethods.GetModelState(modelHandle) == ModelState.InStaticState.value:
+                return Period(PeriodNum.StaticState)
+            else:
+                return Period(PeriodNum.WholeSimulation)
+        elif isinstance(period, int) or isinstance(period, PeriodNum):
+            return Period(period)
+        else:
+            return SpecifiedPeriod(period[0], period[1])  # type: ignore [index]
+
+    @staticmethod
+    def PreparePeriodCollated(period: PeriodArg) -> Period:
+        if period is None:
+            return Period(PeriodNum.WholeSimulation)
+        else:
+            return HelperMethods.PreparePeriod(None, period)
+
+    @staticmethod
+    def PrepareRestartModels(
+        restartModels: Optional[Iterable[int]],
+    ) -> Optional[numpy.ndarray]:
+        if restartModels is None:
+            return None
+        else:
+            return numpy.array(restartModels, dtype=numpy.int32) + 1  # Python is 0-based, OrcFxAPI is 1-based
+
+    @staticmethod
+    def PrepareProcess(process: numpy.ndarray) -> Tuple[numpy.ndarray, int]:
+        if not process.flags.c_contiguous:
+            process = numpy.ascontiguousarray(process, dtype=numpy.complex128)
+        return process, len(process)
+
+    @staticmethod
+    def ObjectCalled(modelHandle: Handle, name: str) -> ObjectInfo:
+        objectInfo = ObjectInfo()
+        status = ctypes.c_int()
+        _ObjectCalled(modelHandle, name, objectInfo, status)
+        _CheckStatus(status)
+        return objectInfo
+
+    @staticmethod
+    def ObjectCalledSafe(modelHandle: Handle, name: str) -> ObjectInfo:
+        objectInfo = ObjectInfo()
+        status = ctypes.c_int()
+        _ObjectCalled(modelHandle, name, objectInfo, status)
+        if status.value == StatusCode.NoSuchObject:
+            return ObjectInfo()
+        _CheckStatus(status)
+        return objectInfo
+
+    @staticmethod
+    def ProgressCallbackCancel(
+        progressHandlerReturnValue: Optional[bool],
+    ) -> ctypes.wintypes.BOOL:
+        if progressHandlerReturnValue is None:
+            progressHandlerReturnValue = False
+        return ctypes.wintypes.BOOL(progressHandlerReturnValue)
+
+    @staticmethod
+    def SaveExternalFile(
+        handle: Handle,
+        filename: Union[str, os.PathLike],
+        filetype: ExternalFileType,
+        params: Union[None, Shear7MdsFileParameters, VIVAModesFilesParameters] = None,
+    ) -> None:
+        status = ctypes.c_int()
+        _SaveExternalProgramFile(
+            handle,
+            filetype,
+            None if params is None else ctypes.byref(params),
+            str(filename),
+            status,
+        )
+        _CheckStatus(status)
+
+    @staticmethod
+    def SaveSpreadsheet(
+        handle: Handle,
+        spreadsheetType: SpreadsheetType,
+        filename: Union[str, os.PathLike],
+        parameters: Union[None, LineClashingReportParameters, AirGapReportParameters] = None,
+    ) -> None:
+        status = ctypes.c_int()
+        _SaveSpreadsheet(
+            handle,
+            spreadsheetType,
+            None if parameters is None else ctypes.byref(parameters),
+            str(filename),
+            status,
+        )
+        _CheckStatus(status)
+
+    @staticmethod
+    def SaveSpreadsheetMem(
+        handle: Handle,
+        spreadsheetType: SpreadsheetType,
+        spreadsheetFileType: SpreadsheetFileType,
+        parameters: Union[None, LineClashingReportParameters, AirGapReportParameters] = None,
+    ) -> bytearray:
+        status = ctypes.c_int()
+        buffer = Handle()
+        bufferLen = ctypes.c_int64()
+        _SaveSpreadsheetMem(
+            handle,
+            spreadsheetType,
+            spreadsheetFileType.value,
+            None if parameters is None else ctypes.byref(parameters),
+            buffer,
+            bufferLen,
+            status,
+        )
+        _CheckStatus(status)
+        return HelperMethods.CopyAndFreeBuffer(buffer, bufferLen.value)
+
+    @staticmethod
+    def SetModelThreadCount(handle: Handle, value: int) -> None:
+        status = ctypes.c_int()
+        _SetModelThreadCount(handle, value, status)
+        _CheckStatus(status)
+
+    @staticmethod
+    def TimeHistorySummary(
+        timeHistorySummaryType: TimeHistorySummaryType,
+        times: Optional[ArrayLike],
+        values: ArrayLike,
+        spectralDensityFundamentalFrequency: Optional[float] = None,
+    ) -> GraphCurve:
+        if timeHistorySummaryType == TimeHistorySummaryType.SpectralDensity:
+            if times is None:
+                raise ValueError("times cannot be None for spectral density summary")
+            if len(times) != len(values):  # type: ignore [arg-type]
+                raise ValueError("times and values must have the same length")
+            times = _prepareArray(times)
+        else:
+            times = None
+        values = _prepareArray(values)
+        handle = Handle()
+        summaryValueCount = ctypes.c_int()
+        status = ctypes.c_int()
+        if spectralDensityFundamentalFrequency is None:
+            _CreateTimeHistorySummary(
+                timeHistorySummaryType,
+                len(values),
+                times,
+                values,
+                handle,
+                summaryValueCount,
+                status,
+            )
+        else:
+            specification = TimeHistorySummarySpecification()
+            specification.SpectralDensityFundamentalFrequency = spectralDensityFundamentalFrequency
+            _CreateTimeHistorySummary2(
+                timeHistorySummaryType,
+                len(values),
+                specification,
+                times,
+                values,
+                handle,
+                summaryValueCount,
+                status,
+            )
+        _CheckStatus(status)
+        try:
+            x = _allocateArray(summaryValueCount.value)
+            y = _allocateArray(summaryValueCount.value)
+            _GetTimeHistorySummaryValues(handle, x, y, status)
+            _CheckStatus(status)
+        finally:
+            # no point checking status here since we can't really do anything about a failure
+            _DestroyTimeHistorySummary(handle, status)
+        return GraphCurve(x, y)
+
+    @staticmethod
+    @contextlib.contextmanager
+    def PanelMeshImporter(
+        filename: Union[str, os.PathLike],
+        format: PanelMeshFileFormat,
+        scale: float,
+        bodyNumber: int,
+        importDryPanels: bool,
+    ) -> Generator[_DictLookup, None, None]:
+        filename = str(filename)
+        status = ctypes.c_int()
+        panelMesh = Handle()
+        panelCount = ctypes.c_int()
+        symmetry = ctypes.c_int()
+        if bodyNumber == 1 and importDryPanels:
+            _CreatePanelMesh(filename, format, scale, panelMesh, panelCount, symmetry, status)
+        else:
+            options = PanelMeshImportOptions(format, scale, bodyNumber, importDryPanels)
+            _CreatePanelMesh2(filename, options, panelMesh, panelCount, symmetry, status)
+        _CheckStatus(status)
+        try:
+            yield objectFromDict(
+                {
+                    "handle": panelMesh,
+                    "panelCount": panelCount.value,
+                    "symmetry": PanelMeshSymmetry(symmetry.value),
+                }
+            )
+        finally:
+            # no point checking status here since we can't really do anything about a failure
+            _DestroyPanelMesh(panelMesh, status)
+
+    @staticmethod
+    def Reinterpreted(array: numpy.ndarray, dtype, shape: Optional[Tuple] = None) -> numpy.ndarray:
+        result = array.view(dtype=dtype)
+        if shape is not None:
+            result.shape = shape
+        return result
+
+    @staticmethod
+    def FlattenReportingOrigins(
+        handle: Handle, reportingOrigins: Union[numpy.ndarray, List]
+    ) -> numpy.ndarray:
+        bodyCount = HelperMethods.DiffractionIncludedBodyCount(handle)
+        if isinstance(reportingOrigins, numpy.ndarray):
+            if reportingOrigins.ndim == 2:
+                if reportingOrigins.shape[0] != bodyCount:
+                    raise ValueError(
+                        "the number of rows of reportingOrigins must match the number of bodies included in the analysis"
+                    )
+                if reportingOrigins.shape[1] != 3:
+                    raise ValueError("reportingOrigins must have three columns")
+                return numpy.array(reportingOrigins.flatten(), dtype=numpy.float64)
+            elif reportingOrigins.ndim == 1:
+                if reportingOrigins.size != bodyCount * 3:
+                    raise ValueError("invalid size for reportingOrigins")
+                return numpy.array(reportingOrigins.flatten(), dtype=numpy.float64)
+            else:
+                raise ValueError("invalid dimensions for reportingOrigins")
+        else:
+            if len(reportingOrigins) != bodyCount:
+                raise ValueError(
+                    "the length of reportingOrigins must match the number of bodies included in the analysis"
+                )
+            return numpy.array([Vector(origin) for origin in reportingOrigins], dtype=numpy.float64).flatten()
+
+    @staticmethod
+    def TranslatedDiffractionOutput(
+        handle: Handle,
+        outputType: DiffractionOutputType,
+        reportingOrigins: Union[numpy.ndarray, List],
+        output: Optional[numpy.ndarray],
+        dtype,
+    ) -> Optional[numpy.ndarray]:
+        if output is None:
+            return None
+        reportingOrigins = HelperMethods.FlattenReportingOrigins(handle, reportingOrigins)
+        shape = output.shape
+        outputSize = output.size * dtype().itemsize
+        output = HelperMethods.Reinterpreted(output, numpy.uint8, (outputSize,))
+        status = ctypes.c_int()
+        _TranslateDiffractionOutput(handle, outputType, outputSize, output, reportingOrigins, status)
+        _CheckStatus(status)
+        return HelperMethods.Reinterpreted(output, dtype, shape)
+
+    @staticmethod
+    def DiffractionDoubleArray(handle: Handle, outputType: DiffractionOutputType) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetDiffractionOutput(handle, outputType, outputSize, None, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetDiffractionOutput(handle, outputType, outputSize, output, status)
+        _CheckStatus(status)
+        return HelperMethods.Reinterpreted(output, numpy.float64)
+
+    @staticmethod
+    def DiffractionIncludedBodyCount(handle: Handle) -> int:
+        return HelperMethods.GetDataIntegerNotNone(handle, "NumberOfIncludedBodies", 0)
+
+    @staticmethod
+    def DiffractionFieldPointCount(handle: Handle) -> Optional[int]:
+        return HelperMethods.GetDataInteger(handle, "NumberOfFieldPoints", 0)
+
+    @staticmethod
+    def DiffractionDoubleArrayLength(handle: Handle, outputType: DiffractionOutputType) -> int:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetDiffractionOutput(handle, outputType, outputSize, None, status)
+        _CheckStatus(status)
+        return outputSize.value // 8
+
+    @staticmethod
+    def HydrostaticResults(handle: Handle) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetDiffractionOutput(handle, DiffractionOutputType.HydrostaticResults, outputSize, None, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        itemFields = [
+            ("volume", numpy.float64),
+            ("centreOfBuoyancy", numpy.float64, (3,)),
+            ("mass", numpy.float64),
+            ("centreOfMass", numpy.float64, (3,)),
+            ("restoringMatrix", numpy.float64, (6, 6)),
+            ("inertiaMatrix", numpy.float64, (6, 6)),
+            ("Awp", numpy.float64),
+            ("Lxx", numpy.float64),
+            ("Lyy", numpy.float64),
+            ("Lxy", numpy.float64),
+            ("centreOfFloatation", numpy.float64, (2,))
+        ]
+        if _checkVersion("11.4a37"):
+            itemFields.extend([
+                ("meanHydrostaticForce", numpy.float64, (3,)),
+                ("meanHydrostaticMoment", numpy.float64, (3,)),
+            ])
+
+        itemSizeFromFields = numpy.array([], dtype=numpy.dtype(itemFields)).itemsize
+        bodyCount = HelperMethods.DiffractionIncludedBodyCount(handle)
+        itemSize = outputSize.value // bodyCount
+        if outputSize.value % bodyCount != 0 or itemSize < itemSizeFromFields:
+            raise NotImplementedError("Unrecognised body hydrostatic result type")
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetDiffractionOutput(handle, DiffractionOutputType.HydrostaticResults, outputSize, output, status)
+        _CheckStatus(status)
+
+        if itemSize > itemSizeFromFields:
+            itemFields.append(("Unknown", numpy.uint8, itemSize - itemSizeFromFields))
+        itemType = numpy.dtype(itemFields)
+
+        output = output.view(dtype=itemType)
+        output.shape = (bodyCount,)
+        return output
+
+    @staticmethod
+    def AddedMassDamping(handle: Handle, outputType: DiffractionOutputType) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetDiffractionOutput(handle, outputType, outputSize, None, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        periodOrFreqCount = HelperMethods.DiffractionDoubleArrayLength(
+            handle, DiffractionOutputType.PeriodsOrFrequencies
+        )
+        bodyCount = HelperMethods.DiffractionIncludedBodyCount(handle)
+        dofCount = 6 * bodyCount
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetDiffractionOutput(handle, outputType, outputSize, output, status)
+        _CheckStatus(status)
+        return HelperMethods.Reinterpreted(output, numpy.float64, (periodOrFreqCount, dofCount, dofCount))
+
+    @staticmethod
+    def AddedMassDampingRelativeTo(
+        handle: Handle,
+        outputType: DiffractionOutputType,
+        reportingOrigins: Union[numpy.ndarray, List],
+    ) -> Optional[numpy.ndarray]:
+        output = HelperMethods.AddedMassDamping(handle, outputType)
+        return HelperMethods.TranslatedDiffractionOutput(
+            handle, outputType, reportingOrigins, output, numpy.float64
+        )
+
+    @staticmethod
+    def InfiniteFrequencyAddedMass(handle: Handle) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetDiffractionOutput(
+            handle,
+            DiffractionOutputType.InfiniteFrequencyAddedMass,
+            outputSize,
+            None,
+            status,
+        )
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        bodyCount = HelperMethods.DiffractionIncludedBodyCount(handle)
+        dofCount = 6 * bodyCount
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetDiffractionOutput(
+            handle,
+            DiffractionOutputType.InfiniteFrequencyAddedMass,
+            outputSize,
+            output,
+            status,
+        )
+        _CheckStatus(status)
+        return HelperMethods.Reinterpreted(output, numpy.float64, (dofCount, dofCount))
+
+    @staticmethod
+    def InfiniteFrequencyAddedMassRelativeTo(
+        handle, reportingOrigins: Union[numpy.ndarray, List]
+    ) -> Optional[numpy.ndarray]:
+        output = HelperMethods.InfiniteFrequencyAddedMass(handle)
+        return HelperMethods.TranslatedDiffractionOutput(
+            handle,
+            DiffractionOutputType.InfiniteFrequencyAddedMass,
+            reportingOrigins,
+            output,
+            numpy.float64,
+        )
+
+    @staticmethod
+    def ExtraRollDamping(handle: Handle) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetDiffractionOutput(handle, DiffractionOutputType.ExtraRollDamping, outputSize, None, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        bodyCount = HelperMethods.DiffractionIncludedBodyCount(handle)
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetDiffractionOutput(handle, DiffractionOutputType.ExtraRollDamping, outputSize, output, status)
+        _CheckStatus(status)
+        return HelperMethods.Reinterpreted(output, numpy.float64, (bodyCount,))
+
+    @staticmethod
+    def RollDampingPercentCritical(handle: Handle) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetDiffractionOutput(
+            handle,
+            DiffractionOutputType.RollDampingPercentCritical,
+            outputSize,
+            None,
+            status,
+        )
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        periodOrFreqCount = HelperMethods.DiffractionDoubleArrayLength(
+            handle, DiffractionOutputType.PeriodsOrFrequencies
+        )
+        bodyCount = HelperMethods.DiffractionIncludedBodyCount(handle)
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetDiffractionOutput(
+            handle,
+            DiffractionOutputType.RollDampingPercentCritical,
+            outputSize,
+            output,
+            status,
+        )
+        _CheckStatus(status)
+        return HelperMethods.Reinterpreted(output, numpy.float64, (periodOrFreqCount, bodyCount))
+
+    @staticmethod
+    def DiffractionRAOs(handle: Handle, outputType: DiffractionOutputType) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetDiffractionOutput(handle, outputType, outputSize, None, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        headingCount = HelperMethods.DiffractionDoubleArrayLength(handle, DiffractionOutputType.Headings)
+        periodOrFreqCount = HelperMethods.DiffractionDoubleArrayLength(
+            handle, DiffractionOutputType.PeriodsOrFrequencies
+        )
+        bodyCount = HelperMethods.DiffractionIncludedBodyCount(handle)
+        dofCount = 6 * bodyCount
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetDiffractionOutput(handle, outputType, outputSize, output, status)
+        _CheckStatus(status)
+        return HelperMethods.Reinterpreted(
+            output, numpy.complex128, (headingCount, periodOrFreqCount, dofCount)
+        )
+
+    @staticmethod
+    def DiffractionRAOsRelativeTo(
+        handle: Handle,
+        outputType: DiffractionOutputType,
+        reportingOrigins: Union[numpy.ndarray, List],
+    ) -> Optional[numpy.ndarray]:
+        output = HelperMethods.DiffractionRAOs(handle, outputType)
+        return HelperMethods.TranslatedDiffractionOutput(
+            handle, outputType, reportingOrigins, output, numpy.complex128
+        )
+
+    @staticmethod
+    def QTFHeadingsOrPeriodsOrFrequencies(
+        handle: Handle, outputType: DiffractionOutputType, itemValueCount: int
+    ) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetDiffractionOutput(handle, outputType, outputSize, None, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        itemCount = outputSize.value // 8 // itemValueCount
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetDiffractionOutput(handle, outputType, outputSize, output, status)
+        _CheckStatus(status)
+        return HelperMethods.Reinterpreted(output, numpy.float64, (itemCount, itemValueCount))
+
+    @staticmethod
+    def MeanDriftLoad(handle: Handle, outputType: DiffractionOutputType) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetDiffractionOutput(handle, outputType, outputSize, None, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetDiffractionOutput(handle, outputType, outputSize, output, status)
+        _CheckStatus(status)
+        outputSize.value = 0
+        _GetDiffractionOutput(
+            handle,
+            DiffractionOutputType.MeanDriftHeadingPairs,
+            outputSize,
+            None,
+            status,
+        )
+        _CheckStatus(status)
+        headingPairCount = outputSize.value // 16
+        periodOrFreqCount = HelperMethods.DiffractionDoubleArrayLength(
+            handle, DiffractionOutputType.PeriodsOrFrequencies
+        )
+        if outputType == DiffractionOutputType.MeanDriftLoadMomentumConservation:
+            dofCount = 6
+        else:
+            dofCount = 6 * HelperMethods.DiffractionIncludedBodyCount(handle)
+        return HelperMethods.Reinterpreted(
+            output, numpy.complex128, (headingPairCount, periodOrFreqCount, dofCount)
+        )
+
+    @staticmethod
+    def FieldPointOutput(
+        handle: Handle, outputType: DiffractionOutputType, dofCount: int
+    ) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetDiffractionOutput(handle, outputType, outputSize, None, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        headingCount = HelperMethods.DiffractionDoubleArrayLength(handle, DiffractionOutputType.Headings)
+        periodOrFreqCount = HelperMethods.DiffractionDoubleArrayLength(
+            handle, DiffractionOutputType.PeriodsOrFrequencies
+        )
+        fieldPointCount = HelperMethods.DiffractionFieldPointCount(handle)
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetDiffractionOutput(handle, outputType, outputSize, output, status)
+        _CheckStatus(status)
+        if dofCount > 1:
+            shape = headingCount, periodOrFreqCount, fieldPointCount, dofCount
+        elif dofCount == 1:
+            shape = headingCount, periodOrFreqCount, fieldPointCount  # type: ignore [assignment]
+        else:
+            raise ValueError("invalid dofCount")
+        return HelperMethods.Reinterpreted(output, numpy.complex128, shape)
+
+    @staticmethod
+    def DiffractionPanelCount(handle: Handle):
+        outputSize = ctypes.c_int(4)
+        output = numpy.empty(4, dtype=numpy.uint8)
+        status = ctypes.c_int()
+        _GetDiffractionOutput(handle, DiffractionOutputType.PanelCount, outputSize, output, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return 0
+        return output.view(dtype=numpy.int32)[0]
+
+    @staticmethod
+    def PanelGeometry(handle: Handle) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetDiffractionOutput(handle, DiffractionOutputType.PanelGeometry, outputSize, None, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        itemFields = [
+            ("objectId", numpy.int32),
+            ("vertices", numpy.float64, (4, 3)),
+            ("centroid", numpy.float64, (3,)),
+            ("normal", numpy.float64, (3,)),
+            ("area", numpy.float64),
+        ]
+
+        itemSizeFromFields = numpy.array([], dtype=numpy.dtype(itemFields)).itemsize
+        panelCount = HelperMethods.DiffractionPanelCount(handle)
+        itemSize = outputSize.value // panelCount
+        if outputSize.value % panelCount != 0 or itemSize < itemSizeFromFields:
+            raise NotImplementedError("Panel geometry type not recognised")
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetDiffractionOutput(handle, DiffractionOutputType.PanelGeometry, outputSize, output, status)
+        _CheckStatus(status)
+
+        if itemSize > itemSizeFromFields:
+            itemFields.append(("Unknown", numpy.uint8, itemSize - itemSizeFromFields))
+        itemType = numpy.dtype(itemFields)
+
+        output = output.view(dtype=itemType)
+        output.shape = (panelCount,)
+
+        def objectName(objectId: int) -> str:
+            if objectId == -1:
+                return "Damping lid"
+            bodyIndex = HelperMethods.GetDataIntegerNotNone(
+                handle, "BodyIndex", objectId + 1
+            )  # convert to 1-based index
+            return HelperMethods.GetDataStringNotNone(handle, "BodyName", bodyIndex)
+
+        requiredObjectNameLength = max(
+            [len(objectName(objectId)) for objectId in output["objectId"]]  # type: ignore [call-overload]
+        )  # type: ignore [call-overload]
+        itemFields.insert(1, ("objectName", numpy.dtype(f"<U{requiredObjectNameLength}")))
+        itemType = numpy.dtype(itemFields)
+        result = numpy.empty([panelCount], dtype=itemType)
+        for field in itemFields:
+            if field[0] == "objectName":
+                value = [objectName(objectId) for objectId in output["objectId"]]  # type: ignore [call-overload]
+            else:
+                value = output[field[0]]  # type: ignore [call-overload]
+            result[field[0]] = value
+        return result
+
+    @staticmethod
+    def PanelPressureVelocity(
+        handle: Handle,
+        outputType: DiffractionOutputType,
+        outerCount: int,
+        dofCount: int,
+    ) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetDiffractionOutput(handle, outputType, outputSize, None, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        panelCount = HelperMethods.DiffractionPanelCount(handle)
+        periodOrFreqCount = HelperMethods.DiffractionDoubleArrayLength(
+            handle, DiffractionOutputType.PeriodsOrFrequencies
+        )
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetDiffractionOutput(handle, outputType, outputSize, output, status)
+        _CheckStatus(status)
+        if dofCount > 1:
+            shape = (outerCount, periodOrFreqCount, panelCount, dofCount)
+        else:
+            shape = (outerCount, periodOrFreqCount, panelCount)  # type: ignore [assignment]
+        return HelperMethods.Reinterpreted(output, numpy.complex128, shape)
+
+    @staticmethod
+    def SecondOrderLoad(handle: Handle, outputType: DiffractionOutputType) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetDiffractionOutput(handle, outputType, outputSize, None, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        outputLength = outputSize.value // 8
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetDiffractionOutput(handle, outputType, outputSize, output, status)
+        _CheckStatus(status)
+        outputSize.value = 0
+        _GetDiffractionOutput(handle, DiffractionOutputType.QTFHeadingPairs, outputSize, None, status)
+        _CheckStatus(status)
+        headingCount = outputSize.value // 16
+        outputSize.value = 0
+        _GetDiffractionOutput(
+            handle,
+            DiffractionOutputType.QTFPeriodsOrFrequencies,
+            outputSize,
+            None,
+            status,
+        )
+        _CheckStatus(status)
+        periodCount = outputSize.value // 24
+        bodyCount = HelperMethods.DiffractionIncludedBodyCount(handle)
+        dofCount = 6 * bodyCount
+        return HelperMethods.Reinterpreted(output, numpy.complex128, (headingCount, periodCount, dofCount))
+
+    @staticmethod
+    def FatigueIntegerScalar(handle: Handle, outputType: FatigueOutputType):
+        outputSize = ctypes.c_int(4)
+        output = numpy.empty(4, dtype=numpy.uint8)
+        status = ctypes.c_int()
+        _GetFatigueOutput(handle, outputType, outputSize, output, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return 0
+        return output.view(dtype=numpy.int32)[0]
+
+    @staticmethod
+    def FatigueDoubleArray(handle: Handle, outputType: FatigueOutputType) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetFatigueOutput(handle, outputType, outputSize, None, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetFatigueOutput(handle, outputType, outputSize, output, status)
+        _CheckStatus(status)
+        return HelperMethods.Reinterpreted(output, numpy.float64)
+
+    @staticmethod
+    def FatigueDoubleArrayLength(handle: Handle, outputType: FatigueOutputType) -> int:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetFatigueOutput(handle, outputType, outputSize, None, status)
+        _CheckStatus(status)
+        return outputSize.value // 8
+
+    @staticmethod
+    def FatigueUsingComponents(handle: Handle) -> bool:
+        return HelperMethods.GetDataInteger(handle, "ComponentCount", 0) is not None
+
+    @staticmethod
+    def FatigueUsingTheta(handle: Handle) -> bool:
+        return HelperMethods.GetDataInteger(handle, "ThetaCount", 0) is not None
+
+    @staticmethod
+    def FatigueLoadCaseCount(handle: Handle) -> int:
+        return HelperMethods.GetDataIntegerNotNone(handle, "LoadCaseCount", 0)
+
+    @staticmethod
+    def FatigueOutputPointCount(handle: Handle) -> int:
+        return HelperMethods.GetDataIntegerNotNone(handle, "OutputPointCount", 0)
+
+    @staticmethod
+    def FatigueComponentCount(handle: Handle) -> int:
+        result = HelperMethods.GetDataInteger(handle, "ComponentCount", 0)
+        if result is None:
+            return 1
+        return result
+
+    @staticmethod
+    def FatigueThetaCount(handle: Handle) -> int:
+        result = HelperMethods.GetDataInteger(handle, "ThetaCount", 0)
+        if result is None:
+            return 1
+        return result
+
+    @staticmethod
+    def FatigueOutputPointDetails(
+        handle: Handle, outputType: FatigueOutputType, itemFields: List
+    ) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetFatigueOutput(handle, outputType, outputSize, None, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        itemSizeFromFields = numpy.array([], dtype=numpy.dtype(itemFields)).itemsize  # type: ignore [call-overload]
+        pointCount = HelperMethods.FatigueIntegerScalar(handle, FatigueOutputType.OutputPointCount)
+        itemSize = outputSize.value // pointCount
+        if outputSize.value % pointCount != 0 or itemSize < itemSizeFromFields:
+            raise NotImplementedError("Output point details type not recognised")
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetFatigueOutput(handle, outputType, outputSize, output, status)
+        _CheckStatus(status)
+
+        if itemSize > itemSizeFromFields:
+            itemFields.append(("Unknown", numpy.uint8, itemSize - itemSizeFromFields))
+        itemType = numpy.dtype(itemFields)  # type: ignore [call-overload]
+
+        output = output.view(dtype=itemType)
+        output.shape = (pointCount,)
+        return output
+
+    @staticmethod
+    def FatigueHomogeneousPipeOutputPointDetails(
+        handle: Handle,
+    ) -> Optional[numpy.ndarray]:
+        itemFields = [
+            ("arclength", numpy.float64),
+            ("SNcurveIndex", numpy.int32),
+            ("radialPos", numpy.int32),
+            ("SCF", numpy.float64),
+            ("thicknessCorrectionFactor", numpy.float64),
+        ]
+        output = HelperMethods.FatigueOutputPointDetails(
+            handle, FatigueOutputType.HomogeneousPipeOutputPointDetails, itemFields
+        )
+        if output is not None:
+            # convert to 0-based indices
+            output["SNcurveIndex"] -= 1
+        return output
+
+    @staticmethod
+    def FatigueComponentOutputPointDetails(handle: Handle) -> Optional[numpy.ndarray]:
+        itemFields = [
+            ("arclength", numpy.float64),
+        ]
+        output = HelperMethods.FatigueOutputPointDetails(
+            handle, FatigueOutputType.ComponentOutputPointDetails, itemFields
+        )
+        return output
+
+    @staticmethod
+    def FatigueMooringOutputPointDetails(handle: Handle) -> Optional[numpy.ndarray]:
+        itemFields = [
+            ("arclength", numpy.float64),
+            ("TNcurveIndex", numpy.int32),
+        ]
+        output = HelperMethods.FatigueOutputPointDetails(
+            handle, FatigueOutputType.MooringOutputPointDetails, itemFields
+        )
+        if output is not None:
+            # convert to 0-based indices
+            output["TNcurveIndex"] -= 1
+        return output
+
+    @staticmethod
+    def FatigueShear7OutputPointDetails(handle: Handle) -> Optional[numpy.ndarray]:
+        itemFields = [
+            ("arclength", numpy.float64),
+            ("xOverL", numpy.float64),
+        ]
+        output = HelperMethods.FatigueOutputPointDetails(
+            handle, FatigueOutputType.Shear7OutputPointDetails, itemFields
+        )
+        return output
+
+    @staticmethod
+    def FatigueHistogramOutputPointDetails(handle: Handle) -> Optional[numpy.ndarray]:
+        itemFields = [
+            ("arclength", numpy.float64),
+            ("radialPos", numpy.int32),
+        ]
+        output = HelperMethods.FatigueOutputPointDetails(
+            handle, FatigueOutputType.HistogramOutputPointDetails, itemFields
+        )
+        return output
+
+    @staticmethod
+    def FatigueDamage(
+        handle: Handle,
+        outputType: FatigueOutputType,
+        loadCaseCount: Optional[int],
+        itemFields: List,
+    ) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetFatigueOutput(handle, outputType, outputSize, None, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        arclengthCount = HelperMethods.FatigueOutputPointCount(handle)
+        componentCount = (
+            HelperMethods.FatigueComponentCount(handle)
+            if HelperMethods.FatigueUsingComponents(handle)
+            else None
+        )
+        thetaCount = (
+            HelperMethods.FatigueThetaCount(handle) if HelperMethods.FatigueUsingTheta(handle) else None
+        )
+
+        shape = []
+        if loadCaseCount is None:
+            loadCaseCount = 1
+        else:
+            shape.append(loadCaseCount)
+        shape.append(arclengthCount)
+        if componentCount is None:
+            componentCount = 1
+        else:
+            shape.append(componentCount)
+        if thetaCount is None:
+            thetaCount = 1
+        else:
+            shape.append(thetaCount)
+
+        itemSizeFromFields = numpy.array([], dtype=numpy.dtype(itemFields)).itemsize
+        itemCount = loadCaseCount * arclengthCount * componentCount * thetaCount
+        itemSize = outputSize.value // itemCount
+        if outputSize.value % itemCount != 0 or itemSize < itemSizeFromFields:
+            raise NotImplementedError("Damage item type not recognised")
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetFatigueOutput(handle, outputType, outputSize, output, status)
+        _CheckStatus(status)
+
+        if itemSize > itemSizeFromFields:
+            itemFields.append(("Unknown", numpy.uint8, itemSize - itemSizeFromFields))
+        itemType = numpy.dtype(itemFields)
+
+        output = output.view(dtype=itemType)
+        output.shape = shape  # type: ignore [assignment]
+        return output
+
+    @staticmethod
+    def FatigueDeterministicLoadCaseDamage(handle: Handle) -> Optional[numpy.ndarray]:
+        itemFields = [
+            ("MinResponse", numpy.float64),
+            ("MaxResponse", numpy.float64),
+            ("MeanResponse", numpy.float64),
+            ("Damage", numpy.float64),
+            ("DamageRate", numpy.float64),
+        ]
+        output = HelperMethods.FatigueDamage(
+            handle,
+            FatigueOutputType.DeterministicLoadCaseDamage,
+            HelperMethods.FatigueLoadCaseCount(handle),
+            itemFields,
+        )
+        return output
+
+    @staticmethod
+    def FatigueSpectralLoadCaseDamage(handle: Handle) -> Optional[numpy.ndarray]:
+        itemFields = [
+            ("MeanResponse", numpy.float64),
+            ("Damage", numpy.float64),
+            ("DamageRate", numpy.float64),
+        ]
+        output = HelperMethods.FatigueDamage(
+            handle,
+            FatigueOutputType.SpectralLoadCaseDamage,
+            HelperMethods.FatigueLoadCaseCount(handle),
+            itemFields,
+        )
+        return output
+
+    @staticmethod
+    def FatigueShear7LoadCaseDamage(handle: Handle) -> Optional[numpy.ndarray]:
+        itemFields = [
+            ("Damage", numpy.float64),
+            ("DamageRate", numpy.float64),
+        ]
+        output = HelperMethods.FatigueDamage(
+            handle,
+            FatigueOutputType.Shear7LoadCaseDamage,
+            HelperMethods.FatigueLoadCaseCount(handle),
+            itemFields,
+        )
+        return output
+
+    @staticmethod
+    def FatigueOverallDamage(handle: Handle) -> Optional[numpy.ndarray]:
+        itemFields = [
+            ("Damage", numpy.float64),
+            ("Life", numpy.float64),
+        ]
+        output = HelperMethods.FatigueDamage(handle, FatigueOutputType.OverallDamage, None, itemFields)
+        return output
+
+    @staticmethod
+    def FatigueCycleRate(
+        handle: Handle, outputType: FatigueOutputType, loadCaseCount: Optional[int]
+    ) -> Optional[numpy.ndarray]:
+        outputSize = ctypes.c_int(0)
+        status = ctypes.c_int()
+        _GetFatigueOutput(handle, outputType, outputSize, None, status)
+        _CheckStatus(status)
+        if outputSize.value == 0:
+            return None
+
+        arclengthCount = HelperMethods.FatigueOutputPointCount(handle)
+        thetaCount = (
+            HelperMethods.FatigueThetaCount(handle) if HelperMethods.FatigueUsingTheta(handle) else None
+        )
+        binCount = HelperMethods.FatigueDoubleArrayLength(handle, FatigueOutputType.HistogramBins)
+
+        shape = []
+        if loadCaseCount is not None:
+            shape.append(loadCaseCount)
+        shape.append(arclengthCount)
+        if thetaCount is not None:
+            shape.append(thetaCount)
+        shape.append(binCount)
+
+        output = numpy.empty(outputSize.value, dtype=numpy.uint8)
+        _GetFatigueOutput(handle, outputType, outputSize, output, status)
+        _CheckStatus(status)
+        return HelperMethods.Reinterpreted(output, numpy.float64, shape)  # type: ignore [arg-type]
+
+
+_modelBase: Any
+if _supportsGenerics:
+    _modelBase = Mapping[str, "OrcaFlexObject"]
+else:
+    _modelBase = Mapping
+
+
+class Model(_modelBase):
+
+    __slots__ = (
+        "handle",
+        "ownsModelHandle",
+        "general",
+        "environment",
+        "progressHandler",
+        "progressHandlerCallback",
+        "correctExternalFileReferencesHandler",
+        "correctExternalFileReferencesHandlerCallback",
+        "batchProgressHandler",
+        "staticsProgressHandler",
+        "dynamicsProgressHandler",
+        "postCalculationActionProgressHandler",
+    )
+
+    _hookOrcaFlexObjectClass: List[
+        Callable[[ObjectType, Type["OrcaFlexObject"]], Type["OrcaFlexObject"]]
+    ] = []
+
+    @classmethod
+    def addOrcaFlexObjectClassHook(
+        cls,
+        hook: Callable[[ObjectType, Type["OrcaFlexObject"]], Type["OrcaFlexObject"]],
+    ) -> None:
+        cls._hookOrcaFlexObjectClass.append(hook)
+
+    @classmethod
+    def removeOrcaFlexObjectClassHook(
+        cls,
+        hook: Callable[[ObjectType, Type["OrcaFlexObject"]], Type["OrcaFlexObject"]],
+    ) -> None:
+        cls._hookOrcaFlexObjectClass.remove(hook)
+
+    def __init__(
+        self,
+        filename: Union[str, os.PathLike, None] = None,
+        threadCount: Optional[int] = None,
+        handle: Optional[Handle] = None,
+    ) -> None:
+        status = ctypes.c_int()
+        self.ownsModelHandle = not handle
+        if self.ownsModelHandle:
+            handle = Handle()
+            if threadCount is None:
+                threadCount = -1
+            params = CreateModelParams()
+            params.ThreadCount = threadCount
+            _CreateModel2(handle, params, status)
+            _CheckStatus(status)
+        assert handle is not None
+        self.handle = handle
+        self.general = HelperMethods.CreateOrcaFlexObject(
+            handle, HelperMethods.GetGeneralHandle(handle), ObjectType.General
+        )
+        self.environment = HelperMethods.CreateOrcaFlexObject(
+            handle, HelperMethods.GetEnvironmentHandle(handle), ObjectType.Environment
+        )
+
+        # avoid calling into the API, for benefit of older DLLs which may not have
+        # some of the newer progress handlers, and also for embedded usage where we
+        # don't want to change the current handler, e.g. for PCA progress in DOF
+        object.__setattr__(self, "progressHandler", None)
+        object.__setattr__(self, "batchProgressHandler", None)
+        object.__setattr__(self, "staticsProgressHandler", None)
+        object.__setattr__(self, "dynamicsProgressHandler", None)
+        object.__setattr__(self, "postCalculationActionProgressHandler", None)
+        object.__setattr__(self, "correctExternalFileReferencesHandler", None)
+
+        if filename is not None:
+            filename = str(filename)
+            ft = ctypes.c_int()
+            status = ctypes.c_int()
+            _GetBinaryFileType(filename, ft, status)
+            if status.value != StatusCode.OK or FileType(ft.value) == FileType.DataFile:
+                _LoadData(handle, filename, status)
+            else:
+                _LoadSimulation(handle, filename, status)
+            _CheckStatus(status)
+
+    def __hash__(self) -> int:
+        return hash(self.handle.value)
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, Model):
+            return NotImplemented
+        return self.handle.value == other.handle.value
+
+    def __del__(self) -> None:
+        if self.ownsModelHandle:
+            try:
+                _DestroyModel(self.handle, ctypes.c_int())
+                # no point checking status here since we can't really do anything about a failure
+            # swallow this since we get exceptions when Python terminates unexpectedly
+            except BaseException:
+                # (e.g. CTRL+Z)
+                pass
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        object.__setattr__(self, name, value)
+        if name == "progressHandler":
+            status = ctypes.c_int()
+            if self.progressHandler:  # type: ignore [attr-defined]
+
+                def progressCallback(handle, progress, cancel):
+                    cancel[0] = HelperMethods.ProgressCallbackCancel(self.progressHandler(self, progress))
+
+                self.progressHandlerCallback = _ProgressHandlerProc(progressCallback)
+            else:
+                self.progressHandlerCallback = None
+            _SetProgressHandler(self.handle, self.progressHandlerCallback, status)
+            _CheckStatus(status)
+        elif name == "correctExternalFileReferencesHandler":
+            status = ctypes.c_int()
+            if self.correctExternalFileReferencesHandler:  # type: ignore [attr-defined]
+
+                def correctExternalFileReferencesCallback(handle):
+                    self.correctExternalFileReferencesHandler(self)
+
+                self.correctExternalFileReferencesHandlerCallback = _CorrectExternalFileReferencesProc(
+                    correctExternalFileReferencesCallback
+                )
+            else:
+                self.correctExternalFileReferencesHandlerCallback = None
+            _SetCorrectExternalFileReferencesHandler(
+                self.handle, self.correctExternalFileReferencesHandlerCallback, status
+            )
+            _CheckStatus(status)
+
+    def __getitem__(self, name: str) -> "OrcaFlexObject":
+        objectInfo = HelperMethods.ObjectCalledSafe(self.handle, name)
+        if objectInfo.ObjectHandle is None:
+            raise KeyError(name)
+        return HelperMethods.CreateOrcaFlexObject(
+            self.handle, objectInfo.ObjectHandle, ObjectType(objectInfo.ObjectType)
+        )
+
+    def __iter__(self) -> Iterator[str]:
+        result = []
+
+        def callback(handle, objectInfo):
+            objectHandle = objectInfo[0].ObjectHandle
+            result.append(HelperMethods.GetDataString(objectHandle, "Name", 0))
+
+        status = ctypes.c_int()
+        _EnumerateObjects(self.handle, _EnumerateObjectsProc(callback), ctypes.c_int(), status)
+        _CheckStatus(status)
+        yield from result
+
+    def __len__(self) -> int:
+        objectCount = ctypes.c_int()
+        status = ctypes.c_int()
+        _EnumerateObjects(self.handle, None, objectCount, status)
+        _CheckStatus(status)
+        return objectCount.value
+
+    def __contains__(self, name) -> bool:
+        objectInfo = HelperMethods.ObjectCalledSafe(self.handle, name)
+        return objectInfo.ObjectHandle is not None
+
+    @property
+    def objects(self) -> Tuple["OrcaFlexObject", ...]:
+        return tuple(self.values())
+
+    def _stringProgressHandler(self, handler):
+        if handler:
+
+            def callback(handle, progress, cancel):
+                cancel[0] = HelperMethods.ProgressCallbackCancel(handler(self, progress))
+
+            return _StringProgressHandlerProc(callback)
+        else:
+            return None
+
+    def _batchProgressHandler(self):
+        return self._stringProgressHandler(self.batchProgressHandler)
+
+    def _staticsProgressHandler(self):
+        return self._stringProgressHandler(self.staticsProgressHandler)
+
+    def _dynamicsProgressHandler(self):
+        if self.dynamicsProgressHandler:
+
+            def callback(handle, time, start, stop, cancel):
+                cancel[0] = HelperMethods.ProgressCallbackCancel(
+                    self.dynamicsProgressHandler(self, time, start, stop)
+                )
+
+            return _DynamicsProgressHandlerProc(callback)
+        else:
+            return None
+
+    def _postCalculationActionProgressHandler(self):
+        return self._stringProgressHandler(self.postCalculationActionProgressHandler)
+
+    @staticmethod
+    def orcaFlexObjectClass(type: ObjectType) -> Type["OrcaFlexObject"]:
+        objectClass: Type[OrcaFlexObject]
+        if type == ObjectType.Line:
+            objectClass = OrcaFlexLineObject
+        elif type == ObjectType.LineType or type == ObjectType.BendingStiffness:
+            objectClass = OrcaFlexWizardObject
+        elif type == ObjectType.Vessel:
+            objectClass = OrcaFlexVesselObject
+        elif type == ObjectType.Buoy6D:
+            objectClass = OrcaFlex6DBuoyObject
+        elif type == ObjectType.Turbine:
+            objectClass = OrcaFlexTurbineObject
+        else:
+            objectClass = OrcaFlexObject
+        for hook in Model._hookOrcaFlexObjectClass:
+            objectClass = hook(type, objectClass)
+        return objectClass
+
+    def createOrcaFlexObject(
+        self, objectHandle: Handle, _type: Optional[ObjectType] = None
+    ) -> "OrcaFlexObject":
+        # do not remove this method since it is called by the external function code in OrcaFlex
+        return HelperMethods.CreateOrcaFlexObject(self.handle, objectHandle, _type)
+
+    def ModuleEnabled(self, module: OptionalModule) -> bool:
+        status = ctypes.c_int()
+        result = _ModuleEnabled(self.handle, module, status)
+        _CheckStatus(status)
+        return bool(result)
+
+    @property
+    def groupFirstChild(self) -> Optional["OrcaFlexObject"]:
+        handle = Handle()
+        status = ctypes.c_int()
+        _GroupGetFirstChild(self.handle, handle, status)
+        _CheckStatus(status)
+        if handle:
+            return HelperMethods.CreateOrcaFlexObject(self.handle, handle)
+        else:
+            return None
+
+    @property
+    def threadCount(self) -> int:
+        return HelperMethods.GetModelThreadCount(self.handle)
+
+    @threadCount.setter
+    def threadCount(self, value: int) -> None:
+        HelperMethods.SetModelThreadCount(self.handle, value)
+
+    @property
+    def recommendedTimeSteps(self) -> TimeSteps:
+        result = TimeSteps()
+        status = ctypes.c_int()
+        _GetRecommendedTimeSteps(self.handle, result, status)
+        _CheckStatus(status)
+        return result
+
+    @property
+    def simulationStartTime(self) -> float:
+        return self.simulationTimeStatus.StartTime
+
+    @property
+    def simulationStopTime(self) -> float:
+        return self.simulationTimeStatus.StopTime
+
+    @property
+    def simulationTimeToGo(self) -> float:
+        status = ctypes.c_int()
+        result = _GetSimulationTimeToGo(self.handle, status)
+        _CheckStatus(status)
+        return result
+
+    @property
+    def state(self) -> ModelState:
+        return HelperMethods.GetModelState(self.handle)
+
+    def EulerBucklingLimitExceeded(self) -> bool:
+        assert _supportsGetModelProperty()
+        return HelperMethods.GetBooleanModelProperty(
+            self.handle, ModelPropertyId.EulerBucklingLimitExceededForModel
+        )
+
+    def dongleName(self) -> str:
+        return HelperMethods.GetDataStringNotNone(self.handle, "DongleName", 0)
+
+    @property
+    def dongleAccessMode(self) -> str:
+        return HelperMethods.GetDataStringNotNone(self.handle, "DongleAccessMode", 0)
+
+    @property
+    def donglePort(self) -> str:
+        return HelperMethods.GetDataStringNotNone(self.handle, "DonglePort", 0)
+
+    @property
+    def dongleServer(self) -> str:
+        return HelperMethods.GetDataStringNotNone(self.handle, "DongleServer", 0)
+
+    @property
+    def licenceFileLocation(self) -> str:
+        return HelperMethods.GetDataStringNotNone(self.handle, "LicenceFileLocation", 0)
+
+    @property
+    def licenceStatus(self) -> str:
+        return HelperMethods.GetDataStringNotNone(self.handle, "LicenceStatus", 0)
+
+    @property
+    def latestFileName(self) -> str:
+        return HelperMethods.GetDataStringNotNone(self.handle, "LatestFileName", 0)
+
+    @latestFileName.setter
+    def latestFileName(self, value: Union[str, os.PathLike]) -> None:
+        HelperMethods.SetDataString(self.handle, "LatestFileName", 0, str(value))
+
+    @property
+    def type(self) -> ModelType:
+        return ModelType(self.general.ModelType)
+
+    @type.setter
+    def type(self, value: ModelType) -> None:
+        self.general.ModelType = value.value
+
+    @property
+    def outputBrowserGroupStructureWhenTrackingChanges(self) -> bool:
+        return HelperMethods.GetDataBooleanNotNone(
+            self.handle, "OutputBrowserGroupStructureWhenTrackingChanges", 0
+        )
+
+    @outputBrowserGroupStructureWhenTrackingChanges.setter
+    def outputBrowserGroupStructureWhenTrackingChanges(self, value: bool) -> None:
+        HelperMethods.SetDataBoolean(self.handle, "OutputBrowserGroupStructureWhenTrackingChanges", 0, value)
+
+    @property
+    def restartParentFileNames(self) -> List[str]:
+        status = ctypes.c_int()
+        buffer = Handle()
+        bufferLen = ctypes.c_int64()
+        length = _GetRestartParentFileNames(self.handle, buffer, bufferLen, status)
+        _CheckStatus(status)
+        return HelperMethods.CopyToStringsAndFreeBuffer(buffer, bufferLen.value)
+
+    @property
+    def restartFileNames(self) -> List[str]:
+        return ["<this model>"] + self.restartParentFileNames
+
+    @property
+    def simulationComplete(self) -> bool:
+        simulationComplete = ctypes.wintypes.BOOL()
+        status = ctypes.c_int()
+        _GetSimulationComplete(self.handle, simulationComplete, status)
+        _CheckStatus(status)
+        return bool(simulationComplete)
+
+    @property
+    def simulationTimeStatus(self) -> SimulationTimeStatus:
+        return HelperMethods.GetSimulationTimeStatus(self.handle)
+
+    @property
+    def canResumeSimulation(self) -> bool:
+        return HelperMethods.CanResumeSimulation(self.handle)
+
+    @property
+    def isTimeDomainDynamics(self) -> bool:
+        return HelperMethods.IsTimeDomainDynamics(self.handle)
+
+    @property
+    def isFrequencyDomainDynamics(self) -> bool:
+        return HelperMethods.IsFrequencyDomainDynamics(self.handle)
+
+    @property
+    def isDeterministicFrequencyDomainDynamics(self) -> bool:
+        return HelperMethods.IsDeterministicFrequencyDomainDynamics(self.handle)
+
+    @property
+    def targetRestartStateRecordingTimes(self) -> numpy.ndarray:
+        return HelperMethods.GetDoubleArrayModelProperty(
+            self.handle, ModelPropertyId.TargetRestartStateRecordingTimes
+        )
+
+    @property
+    def actualRestartStateRecordingTimes(self) -> numpy.ndarray:
+        return HelperMethods.GetDoubleArrayModelProperty(
+            self.handle, ModelPropertyId.ActualRestartStateRecordingTimes
+        )
+
+    def AttachToThread(self) -> None:
+        status = ctypes.c_int()
+        _AttachToThread(self.handle, status)
+        _CheckStatus(status)
+
+    def DetachFromThread(self) -> None:
+        status = ctypes.c_int()
+        _DetachFromThread(self.handle, status)
+        _CheckStatus(status)
+
+    def CreateObject(self, type: ObjectType, name: Optional[str] = None) -> "OrcaFlexObject":
+        handle = Handle()
+        status = ctypes.c_int()
+        _CreateObject(self.handle, type, handle, status)
+        _CheckStatus(status)
+        obj = HelperMethods.CreateOrcaFlexObject(self.handle, handle, type)
+        if name:
+            obj.name = name
+        return obj
+
+    def DestroyObject(self, obj: Union["OrcaFlexObject", str]) -> None:
+        if not hasattr(obj, "handle"):
+            # assume that obj is a name
+            obj = self[obj]  # type: ignore [index]
+        status = ctypes.c_int()
+        _DestroyObject(obj.handle, status)  # type: ignore [union-attr]
+        _CheckStatus(status)
+
+    def CreateClones(self, objects: Iterable["OrcaFlexObject"], model: Optional["Model"] = None) -> None:
+        objectHandles = numpy.fromiter([obj.handle.value for obj in objects], dtype=Handle)
+        status = ctypes.c_int()
+        _CreateClone3(
+            self.handle,
+            len(objectHandles),
+            objectHandles,
+            model.handle if model is not None else None,
+            status
+        );
+        _CheckStatus(status)
+
+    def DeleteUnusedTypes(self) -> None:
+        status = ctypes.c_int()
+        _ModifyModel(self.handle, ModifyModelAction.DeleteUnusedTypes, status)
+        _CheckStatus(status)
+
+    def DeleteUnusedVariableDataSources(self) -> None:
+        status = ctypes.c_int()
+        _ModifyModel(self.handle, ModifyModelAction.DeleteUnusedVariableDataSources, status)
+        _CheckStatus(status)
+
+    def Reset(self) -> None:
+        status = ctypes.c_int()
+        _ResetModel(self.handle, status)
+        _CheckStatus(status)
+
+    def Clear(self) -> None:
+        status = ctypes.c_int()
+        _ClearModel(self.handle, status)
+        _CheckStatus(status)
+
+    def NewVariationModel(self, parentFileName: Union[str, os.PathLike]) -> None:
+        status = ctypes.c_int()
+        _NewModel(self.handle, NewModelParams(ModelType.Variation, parentFileName), status)
+        _CheckStatus(status)
+
+    def NewRestartAnalysis(self, parentFileName: Union[str, os.PathLike]) -> None:
+        status = ctypes.c_int()
+        _NewModel(self.handle, NewModelParams(ModelType.Restart, parentFileName), status)
+        _CheckStatus(status)
+
+    def LoadData(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.FileOperation(self.handle, _LoadData, filename)
+
+    def LoadDataMem(self, buffer: bytes, dataFileType: DataFileType = DataFileType.Binary) -> None:
+        status = ctypes.c_int()
+        _LoadDataMem(self.handle, dataFileType.value, buffer, len(buffer), status)
+        _CheckStatus(status)
+
+    def SaveData(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.FileOperation(self.handle, _SaveData, filename)
+
+    def SaveDataMem(self, dataFileType: DataFileType = DataFileType.Binary) -> bytes:
+        status = ctypes.c_int()
+        buffer = Handle()
+        bufferLen = ctypes.c_int64()
+        _SaveDataMem(self.handle, dataFileType.value, buffer, bufferLen, status)
+        _CheckStatus(status)
+        return HelperMethods.CopyAndFreeBuffer(buffer, bufferLen.value)
+
+    def LoadSimulation(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.FileOperation(self.handle, _LoadSimulation, filename)
+
+    def LoadSimulationMem(self, buffer: bytes) -> None:
+        status = ctypes.c_int()
+        _LoadSimulationMem(self.handle, buffer, len(buffer), status)
+        _CheckStatus(status)
+
+    def SaveSimulation(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.FileOperation(self.handle, _SaveSimulation, filename)
+
+    def SaveSimulationMem(self) -> bytes:
+        status = ctypes.c_int()
+        buffer = Handle()
+        bufferLen = ctypes.c_int64()
+        _SaveSimulationMem(self.handle, buffer, bufferLen, status)
+        _CheckStatus(status)
+        return HelperMethods.CopyAndFreeBuffer(buffer, bufferLen.value)
+
+    @property
+    def warnings(self) -> Tuple[str, ...]:
+        def generator() -> Generator[str, None, None]:
+            status = ctypes.c_int()
+            count = _GetNumOfWarnings(self.handle, status)
+            _CheckStatus(status)
+            for index in range(count):
+                length = _GetWarningText(self.handle, index, None, None, status)
+                _CheckStatus(status)
+                warningText = (_char * length)()
+                _GetWarningText(self.handle, index, None, warningText, status)
+                _CheckStatus(status)
+                yield warningText.value
+
+        return tuple(generator())
+
+    def EvaluateWaveFrequencySpectrum(self, f) -> numpy.ndarray:
+        f = _prepareArray(f)
+        N = len(f)
+        S = _allocateArray(N)
+        status = ctypes.c_int()
+        _EvaluateWaveFrequencySpectrum(self.handle, N, f, S, status)
+        _CheckStatus(status)
+        return S
+
+    @property
+    def waveComponents(self) -> Tuple[_DictLookup, ...]:
+        def generator() -> Generator[_DictLookup, None, None]:
+            count = ctypes.c_int()
+            status = ctypes.c_int()
+
+            _GetWaveComponents2(self.handle, count, None, status)
+            _CheckStatus(status)
+
+            components = (WaveComponent * count.value)()
+            _GetWaveComponents2(self.handle, count, components, status)
+            _CheckStatus(status)
+
+            for component in components:
+                obj = component.asObject()
+                obj.Period = 1 / obj.Frequency  # type: ignore [attr-defined]
+                obj.WaveLength = 2 * numpy.pi / obj.WaveNumber  # type: ignore [attr-defined]
+                yield obj
+
+        return tuple(generator())
+
+    @property
+    def windComponents(self) -> Tuple[_DictLookup, ...]:
+        def generator() -> Generator[_DictLookup, None, None]:
+            count = ctypes.c_int()
+            status = ctypes.c_int()
+
+            _GetWindComponents(self.handle, count, None, status)
+            _CheckStatus(status)
+
+            components = (WindComponent * count.value)()
+            _GetWindComponents(self.handle, count, components, status)
+            _CheckStatus(status)
+
+            for index in range(count.value):
+                yield components[index].asObject()
+
+        return tuple(generator())
+
+    @property
+    def frequencyDomainProcessComponents(self) -> Tuple[_DictLookup, ...]:
+        def generator() -> Generator[_DictLookup, None, None]:
+            count = ctypes.c_int()
+            status = ctypes.c_int()
+
+            if _GetFrequencyDomainProcessComponents2Available:
+                GetFrequencyDomainProcessComponents = _GetFrequencyDomainProcessComponents2
+            else:
+                GetFrequencyDomainProcessComponents = _GetFrequencyDomainProcessComponents
+
+            GetFrequencyDomainProcessComponents(self.handle, count, None, status)
+            _CheckStatus(status)
+            components = (FrequencyDomainProcessComponent * count.value)()
+            GetFrequencyDomainProcessComponents(self.handle, count, components, status)
+            _CheckStatus(status)
+
+            for index in range(count.value):
+                yield components[index].asObject()
+
+        return tuple(generator())
+
+    def DefaultInMemoryLogging(self) -> None:
+        status = ctypes.c_int()
+        _DefaultInMemoryLogging(self.handle, status)
+        _CheckStatus(status)
+
+    def DisableInMemoryLogging(self) -> None:
+        status = ctypes.c_int()
+        _DisableInMemoryLogging(self.handle, status)
+        _CheckStatus(status)
+
+    def ForceInMemoryLogging(self) -> None:
+        status = ctypes.c_int()
+        _ForceInMemoryLogging(self.handle, status)
+        _CheckStatus(status)
+
+    def UseVirtualLogging(self) -> None:
+        status = ctypes.c_int()
+        _UseVirtualLogging(self.handle, status)
+        _CheckStatus(status)
+
+    def CalculateStatics(self) -> None:
+        status = ctypes.c_int()
+        _CalculateStatics(self.handle, self._staticsProgressHandler(), status)
+        _CheckStatus(status)
+
+    def RunSimulation(
+        self,
+        enableAutoSave: Optional[bool] = False,
+        autoSaveIntervalMinutes: Optional[int] = DefaultAutoSaveIntervalMinutes,
+        autoSaveFileName: Optional[str] = None,
+    ) -> None:
+        params = RunSimulationParameters(enableAutoSave, autoSaveIntervalMinutes, autoSaveFileName)
+        status = ctypes.c_int()
+        if self.state <= ModelState.Reset:
+            if not self.general.DataNameValid("StaticsEnabled") or HelperMethods.GetDataBoolean(
+                self.general.handle, "StaticsEnabled", 0
+            ):
+                self.CalculateStatics()
+        _RunSimulation2(self.handle, self._dynamicsProgressHandler(), params, status)
+        _CheckStatus(status)
+
+    def ProcessBatchScript(
+        self,
+        filename: Union[str, os.PathLike],
+        enableAutoSave: Optional[bool] = False,
+        autoSaveIntervalMinutes: Optional[int] = DefaultAutoSaveIntervalMinutes,
+        autoSaveFileName: Optional[str] = None,
+    ) -> None:
+        params = RunSimulationParameters(enableAutoSave, autoSaveIntervalMinutes, autoSaveFileName)
+        status = ctypes.c_int()
+        _ProcessBatchScript(
+            self.handle,
+            str(filename),
+            self._batchProgressHandler(),
+            self._staticsProgressHandler(),
+            self._dynamicsProgressHandler(),
+            params,
+            status,
+        )
+        _CheckStatus(status)
+
+    def ExtendSimulation(self, time: float) -> None:
+        status = ctypes.c_int()
+        _ExtendSimulation(self.handle, time, status)
+        _CheckStatus(status)
+
+    def PauseSimulation(self) -> None:
+        if self.state == ModelState.RunningSimulation:
+            status = ctypes.c_int()
+            _PauseSimulation(self.handle, status)
+            _CheckStatus(status)
+
+    def InvokeLineSetupWizard(self) -> None:
+        status = ctypes.c_int()
+        _InvokeLineSetupWizard(self.handle, self._staticsProgressHandler(), status)
+        _CheckStatus(status)
+
+    def UseCalculatedPositions(self, SetLinesToUserSpecifiedStartingShape: Optional[bool] = False) -> None:
+        params = UseCalculatedPositionsForStaticsParameters()
+        params.SetLinesToUserSpecifiedStartingShape = SetLinesToUserSpecifiedStartingShape
+        status = ctypes.c_int()
+        _UseCalculatedPositionsForStatics(self.handle, params, status)
+        _CheckStatus(status)
+
+    def UseStaticLineEndOrientations(self) -> None:
+        status = ctypes.c_int()
+        _UseStaticLineEndOrientations(self.handle, status)
+        _CheckStatus(status)
+
+    @property
+    def defaultViewParameters(self) -> ViewParameters:
+        result = ViewParameters()
+        status = ctypes.c_int()
+        _GetDefaultViewParameters(self.handle, result, status)
+        _CheckStatus(status)
+        return result
+
+    def SaveModelView(
+        self,
+        filename: Union[str, os.PathLike],
+        viewParameters: Optional[ViewParameters] = None,
+    ) -> None:
+        status = ctypes.c_int()
+        _SaveModel3DViewBitmapToFile(self.handle, viewParameters, str(filename), status)
+        _CheckStatus(status)
+
+    def SaveModelViewMem(self, viewParameters: Optional[ViewParameters] = None) -> bytes:
+        status = ctypes.c_int()
+        buffer = Handle()
+        bufferLen = ctypes.c_int64()
+        _SaveModel3DViewBitmapMem(self.handle, viewParameters, buffer, bufferLen, status)
+        _CheckStatus(status)
+        return HelperMethods.CopyAndFreeBuffer(buffer, bufferLen.value)
+
+    @property
+    def simulationDrawTime(self) -> float:
+        status = ctypes.c_int()
+        result = _GetSimulationDrawTime(self.handle, status)
+        _CheckStatus(status)
+        return result
+
+    @simulationDrawTime.setter
+    def simulationDrawTime(self, value: float) -> None:
+        status = ctypes.c_int()
+        _SetSimulationDrawTime(self.handle, value, status)
+        _CheckStatus(status)
+
+    def SaveWaveSearchSpreadsheet(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveSpreadsheet(self.handle, SpreadsheetType.WaveSearch, filename)
+
+    def SaveWaveSearchSpreadsheetMem(
+        self, spreadsheetFileType: SpreadsheetFileType = SpreadsheetFileType.Xlsx
+    ) -> bytes:
+        return HelperMethods.SaveSpreadsheetMem(self.handle, SpreadsheetType.WaveSearch, spreadsheetFileType)
+
+    def SaveLineTypesPropertiesSpreadsheet(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveSpreadsheet(self.handle, SpreadsheetType.LineTypesPropertiesReport, filename)
+
+    def SaveLineTypesPropertiesSpreadsheetMem(
+        self, spreadsheetFileType: SpreadsheetFileType = SpreadsheetFileType.Xlsx
+    ) -> bytes:
+        return HelperMethods.SaveSpreadsheetMem(
+            self.handle, SpreadsheetType.LineTypesPropertiesReport, spreadsheetFileType
+        )
+
+    def SaveCodeChecksProperties(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveSpreadsheet(self.handle, SpreadsheetType.CodeChecksProperties, filename)
+
+    def SaveCodeChecksPropertiesMem(
+        self, spreadsheetFileType: SpreadsheetFileType = SpreadsheetFileType.Xlsx
+    ) -> bytes:
+        return HelperMethods.SaveSpreadsheetMem(
+            self.handle, SpreadsheetType.CodeChecksProperties, spreadsheetFileType
+        )
+
+    def SampleCount(self, period: PeriodArg = None) -> int:
+        return HelperMethods.SampleCount(self.handle, period)
+
+    def SampleTimes(self, period: PeriodArg = None) -> numpy.ndarray:
+        return HelperMethods.SampleTimes(self.handle, period)
+
+    def SampleTimesCollated(
+        self, period: PeriodArg = None, restartModels: Optional[Iterable[int]] = None
+    ) -> numpy.ndarray:
+        with CollatedResults(self.handle, period, restartModels) as collatedResults:
+            return collatedResults.SampleTimes()
+
+    def ExecutePostCalculationActions(
+        self,
+        filename: Union[str, os.PathLike],
+        actionType: PostCalculationActionType,
+        treatExecutionErrorsAsWarnings: Optional[bool] = False,
+    ) -> None:
+        status = ctypes.c_int()
+        _ExecutePostCalculationActions(
+            self.handle,
+            str(filename),
+            self._postCalculationActionProgressHandler(),
+            actionType,
+            treatExecutionErrorsAsWarnings,
+            status,
+        )
+        _CheckStatus(status)
+
+    def ReportActionProgress(self, progress: str) -> None:
+        if _ReportActionProgressAvailable:
+            status = ctypes.c_int()
+            _ReportActionProgressW(self.handle, progress, status)
+            _CheckStatus(status)
+
+    def SaveSummaryResults(
+        self, filename: Union[str, os.PathLike], abbreviated: Optional[bool] = True
+    ) -> None:
+        spreadsheetType = SpreadsheetType.SummaryResults if abbreviated else SpreadsheetType.FullResults
+        HelperMethods.SaveSpreadsheet(self.handle, spreadsheetType, filename)
+
+    def SaveSummaryResultsMem(
+        self,
+        spreadsheetFileType: SpreadsheetFileType = SpreadsheetFileType.Xlsx,
+        abbreviated: Optional[bool] = True,
+    ) -> bytes:
+        spreadsheetType = SpreadsheetType.SummaryResults if abbreviated else SpreadsheetType.FullResults
+        return HelperMethods.SaveSpreadsheetMem(self.handle, spreadsheetType, spreadsheetFileType)
+
+    # deprecated, use SaveSummaryResults(filename, False) instead
+    def SaveFullResults(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveSpreadsheet(self.handle, SpreadsheetType.FullResults, filename)
+
+    def FrequencyDomainResultsFromProcess(self, process: numpy.ndarray) -> _DictLookup:
+        status = ctypes.c_int()
+        result = FrequencyDomainResults()
+        process, length = HelperMethods.PrepareProcess(process)
+        _GetFrequencyDomainResultsFromProcess(self.handle, length, process, result, status)
+        _CheckStatus(status)
+        return result.asObject()
+
+    def FrequencyDomainSpectralDensityFromProcess(self, process: numpy.ndarray) -> GraphCurve:
+        status = ctypes.c_int()
+        pointCount = ctypes.c_int()
+        process, length = HelperMethods.PrepareProcess(process)
+        _GetFrequencyDomainSpectralDensityGraphFromProcess(
+            self.handle, length, None, pointCount, None, status
+        )
+        _CheckStatus(status)
+        curve = _GraphCurve(pointCount.value)
+        _GetFrequencyDomainSpectralDensityGraphFromProcess(
+            self.handle, length, process, pointCount, curve, status
+        )
+        _CheckStatus(status)
+        return GraphCurve(*curve.data)
+
+    def FrequencyDomainSpectralResponseRAOFromProcess(self, process: numpy.ndarray) -> GraphCurve:
+        status = ctypes.c_int()
+        pointCount = ctypes.c_int()
+        process, length = HelperMethods.PrepareProcess(process)
+        _GetFrequencyDomainSpectralResponseGraphFromProcess(
+            self.handle, length, None, pointCount, None, status
+        )
+        _CheckStatus(status)
+        curve = _GraphCurve(pointCount.value)
+        _GetFrequencyDomainSpectralResponseGraphFromProcess(
+            self.handle, length, process, pointCount, curve, status
+        )
+        _CheckStatus(status)
+        return GraphCurve(*curve.data)
+
+    def FrequencyDomainTimeHistorySampleCount(
+        self, period: PeriodArg, sampleInterval: Optional[float] = None
+    ) -> int:
+        return HelperMethods.FrequencyDomainSampleCount(self.handle, period, sampleInterval)
+
+    def FrequencyDomainTimeHistorySampleTimes(
+        self, period: PeriodArg, sampleInterval: Optional[float] = None
+    ) -> numpy.ndarray:
+        return HelperMethods.FrequencyDomainSampleTimes(self.handle, period, sampleInterval)
+
+    def FrequencyDomainTimeHistoryFromProcess(
+        self,
+        process: numpy.ndarray,
+        period: PeriodArg,
+        sampleInterval: Optional[float] = None,
+    ) -> numpy.ndarray:
+        return HelperMethods.FrequencyDomainTimeHistoryFromProcess(
+            self.handle, process, period, sampleInterval
+        )
+
+    # Unsupported, undocumented, internal function, do not call it
+    def ImportVesselTypeData(
+        self,
+        filename,
+        fileType,
+        mappings,
+        calculationMethods=None,
+        destVesselType="",
+        multibodyGroup="",
+        requestedData=(),
+        clearExistingData=False,
+    ):
+        try:
+            bodyCount = len(mappings)
+        except TypeError:
+            bodyCount = 1
+            mappings = [mappings]
+        specification = VesselTypeDataImportSpecification(
+            fileType,
+            bodyCount,
+            multibodyGroup,
+            requestedData,
+            calculationMethods,
+            clearExistingData,
+        )
+
+        def prepareGenericBodyMap(destVesselType, count, mappings):
+            bodyMap = VesselTypeDataGenericImportBodyMapSpecification(destVesselType, count)
+            for i, map in enumerate(mappings):
+                bodyMap.BodyMapList[i] = map
+            return bodyMap
+
+        def prepareDiffractionBodyMap(fileType, count, mappings):
+            bodyMap = (VesselTypeDataDiffractionImportBodyMap * count)()
+
+            def OrcaWaveBodyName(OrcaWave):
+                for i in range(OrcaWave.NumberOfBodies):
+                    if HelperMethods.GetDataBoolean(
+                        OrcaWave.handle, "BodyIncludedInAnalysis", i + 1
+                    ):  # convert to 1-based index
+                        yield OrcaWave.BodyName[i]
+
+            if fileType == iftOrcaWave:
+                OrcaWave = Diffraction()
+                OrcaWave.LoadData(filename)
+                getBodyName = OrcaWaveBodyName(OrcaWave)
+
+            for i, map in enumerate(mappings):
+                bodyMap[i] = map
+                if fileType == iftAQWA:
+                    bodyMap[i].Source = f"Structure {i + 1}"
+                elif fileType == iftWAMIT:
+                    bodyMap[i].Source = f"Body number {i + 1}"
+                elif fileType == iftOrcaWave:
+                    bodyMap[i].Source = next(getBodyName)
+            return bodyMap
+
+        if fileType == iftGeneric:
+            bodyMap = prepareGenericBodyMap(destVesselType, bodyCount, mappings)
+        elif fileType in [iftAQWA, iftWAMIT, iftOrcaWave]:
+            bodyMap = prepareDiffractionBodyMap(fileType, bodyCount, mappings)
+        else:
+            raise TypeError("invalid fileType: ", fileType)
+        messages = ctypes.c_void_p()
+        status = ctypes.c_int()
+        _ImportVesselTypeDataW(
+            self.handle,
+            str(filename),
+            specification,
+            ctypes.byref(bodyMap),
+            messages,
+            status,
+        )
+
+        def decode(messages):
+            # have to perform manual marshalling because memory is allocated in DLL
+            # and not by ctypes
+            bufferLength = ctypes.cdll.msvcrt.wcslen(messages) + 1
+            buffer = (_char * bufferLength)()
+            ctypes.cdll.msvcrt.wcsncpy(ctypes.byref(buffer), messages, bufferLength)
+            return _DecodeString(buffer.value)
+
+        if status.value == StatusCode.VesselTypeDataImportFailed:
+            result = False, decode(messages)
+        else:
+            _CheckStatus(status)
+            result = True, decode(messages)
+        _SysFreeString(messages.value)
+        return result
+
+
+class DataObject(object):
+    def __init__(self, handle: Handle) -> None:
+        self.handle = handle
+
+    def __hash__(self) -> int:
+        return hash(self.handle.value)
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, DataObject):
+            return NotImplemented
+        return self.handle.value == other.handle.value
+
+    def isBuiltInAttribute(self, name: str) -> bool:
+        return name in ("handle", "status", "_tags")
+
+    def __getattr__(self, name: str) -> Any:
+        if self.isBuiltInAttribute(name):
+            return object.__getattr__(self, name)  # type: ignore [attr-defined]
+        elif self.DataNameValid(name):
+            if self.DataNameRequiresIndex(name):
+                return IndexedDataItem(name, self)
+            else:
+                return self.GetData(name, -1)
+        else:
+            raise AttributeError(name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if self.isBuiltInAttribute(name):
+            object.__setattr__(self, name, value)
+        elif self.DataNameValid(name):
+            if self.DataNameRequiresIndex(name):
+                IndexedDataItem(name, self).Assign(value)
+            else:
+                self.SetData(name, -1, value)
+        else:
+            raise AttributeError(name)
+
+    def VariableDataType(self, dataName: str, index: int) -> DataType:
+        index = int(index) + 1  # Python is 0-based, OrcFxAPI is 1-based
+        status = ctypes.c_int()
+        result = ctypes.c_int()
+        _GetVariableDataType(self.handle, dataName, index, result, status)
+        _CheckStatus(status)
+        return DataType(result.value)
+
+    def DataType(self, dataName: str) -> DataType:
+        status = ctypes.c_int()
+        result = ctypes.c_int()
+        _GetDataType(self.handle, dataName, result, status)
+        _CheckStatus(status)
+        return DataType(result.value)
+
+    def DataNameValid(self, dataName: str) -> bool:
+        return HelperMethods.DataNameValid(self.handle, dataName)
+
+    def DataNameRequiresIndex(self, dataName: str) -> bool:
+        status = ctypes.c_int()
+        if _DataRequiresIndexAvailable:
+            result = ctypes.wintypes.BOOL()
+            _DataRequiresIndex(self.handle, dataName, result, status)
+            _CheckStatus(status)
+            return bool(result)
+        else:
+            rowCount = ctypes.c_int()
+            _GetDataRowCount(self.handle, dataName, rowCount, status)
+            if (
+                status.value == StatusCode.ValueNotAvailable
+            ):  # can only happen if CountVarNum != vnNull, hence return True
+                return True
+            _CheckStatus(status)
+            return rowCount.value != -1
+
+    def IsDefault(self, dataName: str, index: int) -> bool:
+        return HelperMethods.PerformDataActionGetBool(self.handle, dataName, index, DataAction.IsDefault)
+
+    def HasChanged(self, dataName: str, index: int) -> bool:
+        return HelperMethods.PerformDataActionGetBool(self.handle, dataName, index, DataAction.HasChanged)
+
+    def IsMarkedAsChanged(self, dataName: str, index: int) -> bool:
+        return HelperMethods.PerformDataActionGetBool(
+            self.handle, dataName, index, DataAction.IsMarkedAsChanged
+        )
+
+    def SetToDefault(self, dataName: str, index: int) -> None:
+        HelperMethods.PerformDataAction(self.handle, dataName, index, DataAction.SetToDefault)
+
+    def SetToOriginalValue(self, dataName: str, index: int) -> None:
+        HelperMethods.PerformDataAction(self.handle, dataName, index, DataAction.SetToOriginalValue)
+
+    def MarkAsChanged(self, dataName: str, index: int, value: bool) -> None:
+        HelperMethods.PerformDataActionSetBool(self.handle, dataName, index, DataAction.MarkAsChanged, value)
+
+    def GetDataRowCount(self, indexedDataName: str) -> int:
+        rowCount = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetDataRowCount(self.handle, indexedDataName, rowCount, status)
+        _CheckStatus(status)
+        return rowCount.value
+
+    def SetDataRowCount(self, indexedDataName: str, rowCount: int) -> None:
+        status = ctypes.c_int()
+        _SetDataRowCount(self.handle, indexedDataName, rowCount, status)
+        _CheckStatus(status)
+
+    def InsertDataRow(self, indexedDataName: str, index: int) -> None:
+        index = int(index) + 1  # Python is 0-based, OrcFxAPI is 1-based
+        status = ctypes.c_int()
+        _InsertDataRow(self.handle, indexedDataName, index, status)
+        _CheckStatus(status)
+
+    def DeleteDataRow(self, indexedDataName: str, index: int) -> None:
+        index = int(index) + 1  # Python is 0-based, OrcFxAPI is 1-based
+        status = ctypes.c_int()
+        _DeleteDataRow(self.handle, indexedDataName, index, status)
+        _CheckStatus(status)
+
+    def dataChange(self):
+        class dataChangeContext(object):
+            def __init__(self, obj: DataObject):
+                self.obj = obj
+
+            def __enter__(self) -> None:
+                if _BeginEndDataChangeAvailable:
+                    status = ctypes.c_int()
+                    _BeginDataChange(self.obj.handle, status)
+                    _CheckStatus(status)
+
+            def __exit__(self, exc_type, exc_value, exc_traceback) -> None:
+                if _BeginEndDataChangeAvailable:
+                    status = ctypes.c_int()
+                    _EndDataChange(self.obj.handle, status)
+                    _CheckStatus(status)
+
+        return dataChangeContext(self)
+
+    def GetData(self, dataNames: Union[str, Iterable[str]], index: int) -> Union[Any, Iterable[Any]]:
+        def GetSingleDataItem(dataName: str, index: int) -> Any:
+            index = int(index) + 1  # Python is 0-based, OrcFxAPI is 1-based
+            dataType = ctypes.c_int()
+            status = ctypes.c_int()
+            _GetDataType(self.handle, dataName, dataType, status)
+            _CheckStatus(status)
+            if dataType.value == DataType.Variable:
+                _GetVariableDataType(self.handle, dataName, index, dataType, status)
+                if status.value == StatusCode.ValueNotAvailable:
+                    return None
+                _CheckStatus(status)
+            if dataType.value == DataType.Double:
+                return HelperMethods.GetDataDouble(self.handle, dataName, index)
+            elif dataType.value == DataType.Integer:
+                return HelperMethods.GetDataInteger(self.handle, dataName, index)
+            elif dataType.value == DataType.IntegerIndex:
+                result = HelperMethods.GetDataInteger(self.handle, dataName, index)
+                if result is None:
+                    return None
+                return result - 1  # Python is 0-based, OrcFxAPI is 1-based
+            elif dataType.value == DataType.String:
+                return HelperMethods.GetDataString(self.handle, dataName, index)
+            elif dataType.value == DataType.Boolean:
+                result = HelperMethods.GetDataInteger(self.handle, dataName, index)
+                if result is None:
+                    return None
+                return result != 0
+            else:
+                raise DLLError(StatusCode.UnexpectedError, "Unrecognised data type")
+
+        if isinstance(dataNames, str):
+            return GetSingleDataItem(dataNames, index)
+        else:
+            return [GetSingleDataItem(dataName, index) for dataName in dataNames]
+
+    def SetData(
+        self,
+        dataNames: Union[str, Iterable[str]],
+        index: int,
+        values: Union[Any, Iterable[Any]],
+    ) -> None:
+        def SetSingleDataItem(dataName: str, index: int, value: Any) -> None:
+            index = int(index) + 1  # Python is 0-based, OrcFxAPI is 1-based
+            dataType = ctypes.c_int()
+            status = ctypes.c_int()
+            _GetDataType(self.handle, dataName, dataType, status)
+            _CheckStatus(status)
+            if dataType.value == DataType.Variable:
+                try:
+                    float(value)
+                    dataType.value = DataType.Double
+                except BaseException:
+                    dataType.value = DataType.String
+            if dataType.value == DataType.Double:
+                _SetDataDouble(self.handle, dataName, index, ctypes.c_double(value), status)
+                _CheckStatus(status)
+            elif dataType.value == DataType.Integer:
+                _SetDataInteger(self.handle, dataName, index, ctypes.c_int(value), status)
+                _CheckStatus(status)
+            elif dataType.value == DataType.IntegerIndex:
+                # Python is 0-based, OrcFxAPI is 1-based:
+                _SetDataInteger(self.handle, dataName, index, ctypes.c_int(value + 1), status)
+                _CheckStatus(status)
+            elif dataType.value == DataType.String:
+                _SetDataString(self.handle, dataName, index, value, status)
+                _CheckStatus(status)
+            elif dataType.value == DataType.Boolean:
+                _SetDataInteger(self.handle, dataName, index, ctypes.c_int(value), status)
+                _CheckStatus(status)
+            else:
+                raise DLLError(StatusCode.UnexpectedError, "Unrecognised data type")
+
+        if isinstance(dataNames, str):
+            SetSingleDataItem(dataNames, index, values)
+        else:
+            for dataName, value in zip(dataNames, values):
+                SetSingleDataItem(dataName, index, value)
+
+    def UnitsConversionFactor(self, units: str) -> float:
+        status = ctypes.c_int()
+        result = ctypes.c_double()
+        _GetUnitsConversionFactor(self.handle, units, result, status)
+        _CheckStatus(status)
+        return result.value
+
+    @property
+    def tags(self) -> Optional[Tags]:
+        result = getattr(self, "_tags", None)
+        if result is None:
+            # deal with scenarios where tags are not available without throwing exceptions at the consumer
+            if not ImportedFunctionAvailable(_GetTagCount):
+                return None
+            status = ctypes.c_int()
+            _GetTagCount(self.handle, status)
+            if status.value == StatusCode.InvalidObjectType:
+                return None
+            _CheckStatus(status)
+
+            result = Tags(self.handle)
+            self._tags = result
+        return result
+
+
+class OrcaFlexObject(DataObject):
+    def __init__(self, modelHandle: Handle, handle: Handle, type: ObjectType) -> None:
+        super().__init__(handle)
+        self.modelHandle = modelHandle
+        self.type = type
+
+    def isBuiltInAttribute(self, name: str) -> bool:
+        return name in (
+            "modelHandle",
+            "type",
+            "groupParent",
+        ) or DataObject.isBuiltInAttribute(self, name)
+
+    def __repr__(self) -> str:
+        return f'{type(self).__name__}(type="{self.typeName}", name="{self.name}")'
+
+    def __str__(self) -> str:
+        return self.name
+
+    def CreateClone(self, name: Optional[str] = None, model: Optional[Model] = None) -> "OrcaFlexObject":
+        handle = Handle()
+        status = ctypes.c_int()
+        if model is None:
+            modelHandle = self.modelHandle
+            _CreateClone(self.handle, handle, status)
+            _CheckStatus(status)
+            clone = HelperMethods.CreateOrcaFlexObject(self.modelHandle, handle, self.type)
+        else:
+            modelHandle = model.handle
+            _CreateClone2(self.handle, modelHandle, handle, status)
+            _CheckStatus(status)
+        clone = HelperMethods.CreateOrcaFlexObject(modelHandle, handle, self.type)
+        if name is not None:
+            clone.name = name
+        return clone
+
+    @property
+    def typeName(self) -> str:
+        status = ctypes.c_int()
+        length = _GetObjectTypeName(self.modelHandle, self.type, None, status)
+        _CheckStatus(status)
+        name = (_char * length)()
+        _GetObjectTypeName(self.modelHandle, self.type, name, status)
+        _CheckStatus(status)
+        return _DecodeString(name.value)
+
+    @property
+    def groupFirstChild(self) -> Optional["OrcaFlexObject"]:
+        handle = Handle()
+        status = ctypes.c_int()
+        _GroupGetFirstChild(self.handle, handle, status)
+        _CheckStatus(status)
+        if handle:
+            return HelperMethods.CreateOrcaFlexObject(self.modelHandle, handle)
+        else:
+            return None
+
+    @property
+    def groupParent(self) -> Optional["OrcaFlexObject"]:
+        handle = Handle()
+        status = ctypes.c_int()
+        _GroupGetParent(self.handle, handle, status)
+        _CheckStatus(status)
+        if handle:
+            return HelperMethods.CreateOrcaFlexObject(self.modelHandle, handle)
+        else:
+            return None
+
+    @groupParent.setter
+    def groupParent(self, value: Optional["OrcaFlexObject"]) -> None:
+        status = ctypes.c_int()
+        if value is None:
+            parentHandle = None
+        else:
+            parentHandle = value.handle
+        _GroupSetParent(self.handle, parentHandle, status)
+        _CheckStatus(status)
+
+    @property
+    def groupNextSibling(self) -> Optional["OrcaFlexObject"]:
+        handle = Handle()
+        status = ctypes.c_int()
+        _GroupGetNextSibling(self.handle, handle, status)
+        _CheckStatus(status)
+        if handle:
+            return HelperMethods.CreateOrcaFlexObject(self.modelHandle, handle)
+        else:
+            return None
+
+    @property
+    def groupPrevSibling(self) -> Optional["OrcaFlexObject"]:
+        handle = Handle()
+        status = ctypes.c_int()
+        _GroupGetPrevSibling(self.handle, handle, status)
+        _CheckStatus(status)
+        if handle:
+            return HelperMethods.CreateOrcaFlexObject(self.modelHandle, handle)
+        else:
+            return None
+
+    def GroupChildren(self, recurse: Optional[bool] = True) -> Generator["OrcaFlexObject", None, None]:
+        child = self.groupFirstChild
+        while child is not None:
+            yield child
+            if recurse:
+                for obj in child.GroupChildren(True):
+                    yield obj
+            child = child.groupNextSibling
+
+    def GroupMoveAfter(self, target: "OrcaFlexObject") -> None:
+        status = ctypes.c_int()
+        _GroupMoveAfter(self.handle, target.handle, status)
+        _CheckStatus(status)
+
+    def GroupMoveBefore(self, target: "OrcaFlexObject") -> None:
+        status = ctypes.c_int()
+        _GroupMoveBefore(self.handle, target.handle, status)
+        _CheckStatus(status)
+
+    def AssignWireFrameFromPanelMesh(
+        self,
+        filename: Union[str, os.PathLike],
+        format: PanelMeshFileFormat,
+        symmetry: PanelMeshSymmetry,
+        importOrigin: Optional[Sequence[float]] = None,
+        wireFrameType: WireFrameType = WireFrameType.Panels,
+        scale: float = 1,
+        bodyNumber: int = 1,
+        importDryPanels: bool = True,
+    ) -> None:
+        with HelperMethods.PanelMeshImporter(
+            filename, format, scale, bodyNumber, importDryPanels
+        ) as importer:
+            status = ctypes.c_int()
+            if importOrigin is None:
+                importOrigin = (0,) * 3
+            importOrigin = (ctypes.c_double * 3)(*importOrigin)  # type: ignore [assignment]
+            _AssignWireFrameFromPanelMesh(
+                self.handle,
+                importer.handle,  # type: ignore [attr-defined]
+                symmetry | (wireFrameType << 3),
+                importOrigin,
+                status,
+            )  # type: ignore [attr-defined]
+            _CheckStatus(status)
+
+    def SampleCount(self, period: PeriodArg = None) -> int:
+        return HelperMethods.SampleCount(self.modelHandle, period)
+
+    def SampleTimes(self, period: PeriodArg = None) -> numpy.ndarray:
+        return HelperMethods.SampleTimes(self.modelHandle, period)
+
+    def SampleTimesCollated(
+        self, period: PeriodArg = None, restartModels: Optional[Iterable[int]] = None
+    ) -> numpy.ndarray:
+        with CollatedResults(self.modelHandle, period, restartModels) as collatedResults:
+            return collatedResults.SampleTimes()
+
+    def varID(self, varName: str) -> int:
+        varID = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetVarID(self.handle, varName, varID, status)
+        _CheckStatus(status)
+        return varID.value
+
+    def varDetails(
+        self,
+        resultType: ResultType = ResultType.TimeHistory,
+        objectExtra: Optional[ObjectExtra] = None,
+    ) -> Tuple[_DictLookup, ...]:
+        result = []
+
+        def callback(varInfo):
+            result.append(
+                objectFromDict(
+                    {
+                        "VarName": varInfo[0].VarName,
+                        "VarUnits": varInfo[0].VarUnits,
+                        "FullName": varInfo[0].FullName,
+                    }
+                )
+            )
+
+        varCount = ctypes.c_int()
+        status = ctypes.c_int()
+        _EnumerateVars2(
+            self.handle,
+            objectExtra,
+            resultType,
+            _EnumerateVarsProc(callback),
+            varCount,
+            status,
+        )
+        _CheckStatus(status)
+        return tuple(result)
+
+    def vars(
+        self,
+        resultType: ResultType = ResultType.TimeHistory,
+        objectExtra: Optional[ObjectExtra] = None,
+    ) -> Tuple[str, ...]:
+        result = []
+
+        def callback(varInfo):
+            result.append(varInfo[0].VarName)
+
+        varCount = ctypes.c_int()
+        status = ctypes.c_int()
+        _EnumerateVars2(
+            self.handle,
+            objectExtra,
+            resultType,
+            _EnumerateVarsProc(callback),
+            varCount,
+            status,
+        )
+        _CheckStatus(status)
+        return tuple(result)
+
+    def ObjectExtraFieldRequired(self, varName: str, field: ObjectExtraField) -> bool:
+        varID = self.varID(varName)
+        required = ctypes.wintypes.BOOL()
+        status = ctypes.c_int()
+        _GetObjectExtraFieldRequired(self.handle, varID, field, required, status)
+        _CheckStatus(status)
+        return bool(required)
+
+    def RequiredObjectExtraFields(self, varName: str) -> Iterable[ObjectExtraField]:
+        varID = self.varID(varName)
+        fields = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetRequiredObjectExtraFields(self.handle, varID, fields, status)
+        _CheckStatus(status)
+        return [ObjectExtraField(i) for i in range(32) if fields.value & 1 << i]
+
+    def LineResultPoints(self, varName: str) -> LineResultPoints:
+        varID = self.varID(varName)
+        result = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetLineResultPoints(self.handle, varID, result, status)
+        _CheckStatus(status)
+        return LineResultPoints(result.value)
+
+    def TimeHistory(
+        self,
+        varNames: Union[str, Iterable[str]],
+        period: PeriodArg = None,
+        objectExtra: Optional[ObjectExtra] = None,
+    ) -> numpy.ndarray:
+        def getTimeHistory(varName, period, objectExtra):
+            if isFrequencyDomainResult:
+                return HelperMethods.FrequencyDomainTimeHistory(
+                    self.modelHandle,
+                    self.handle,
+                    self.varID(varName),
+                    period,
+                    objectExtra,
+                    None,
+                )
+            else:
+                return HelperMethods.TimeDomainTimeHistory(
+                    self.modelHandle,
+                    self.handle,
+                    self.varID(varName),
+                    period,
+                    objectExtra,
+                )
+
+        period = HelperMethods.PreparePeriod(self.modelHandle, period)
+        isFrequencyDomainResult = HelperMethods.IsFrequencyDomainResult(self.modelHandle, period)
+        if isinstance(varNames, str):
+            return getTimeHistory(varNames, period, objectExtra)
+        elif isFrequencyDomainResult or not ImportedFunctionAvailable(_GetMultipleTimeHistories):
+            hist = []
+            for varName in varNames:
+                hist.append(getTimeHistory(varName, period, objectExtra))
+            return numpy.column_stack(hist)
+        else:
+            spec = [TimeHistorySpecification(self, varName, objectExtra) for varName in varNames]
+            return GetMultipleTimeHistories(spec, period)
+
+    def TimeHistoryCollated(
+        self,
+        varNames: Union[str, Iterable[str]],
+        period: PeriodArg = None,
+        objectExtra: Optional[ObjectExtra] = None,
+        restartModels: Optional[Iterable[int]] = None,
+    ) -> numpy.ndarray:
+        with CollatedResults(self.modelHandle, period, restartModels) as collatedResults:
+            return collatedResults.TimeHistory(self, varNames, objectExtra)
+
+    def StaticResult(
+        self,
+        varNames: Union[str, Iterable[str]],
+        objectExtra: Optional[ObjectExtra] = None,
+    ) -> Union[float, numpy.ndarray]:
+        return self.TimeHistory(varNames, PeriodNum.StaticState, objectExtra)[0]
+
+    def LinkedStatistics(
+        self,
+        varNames: Union[str, Sequence[str]],
+        period: PeriodArg = None,
+        objectExtra: Optional[ObjectExtra] = None,
+    ) -> "LinkedStatistics":
+        return LinkedStatistics(self, varNames, period, objectExtra)
+
+    def TimeSeriesStatistics(
+        self,
+        varName: str,
+        period: PeriodArg = None,
+        objectExtra: Optional[ObjectExtra] = None,
+    ) -> _DictLookup:
+        return TimeSeriesStatistics(
+            self.TimeHistory(varName, period, objectExtra),
+            HelperMethods.ActualLogSampleInterval(self.modelHandle),  # type: ignore [arg-type]
+        )
+
+    def ExtremeStatistics(
+        self,
+        varName: str,
+        period: PeriodArg = None,
+        objectExtra: Optional[ObjectExtra] = None,
+    ) -> "ExtremeStatistics":
+        values = self.TimeHistory(varName, period, objectExtra)
+        sampleInterval = HelperMethods.ActualLogSampleInterval(self.modelHandle)
+        assert sampleInterval is not None
+        return ExtremeStatistics(values, sampleInterval)
+
+    def FrequencyDomainResults(self, varName: str, objectExtra: Optional[ObjectExtra] = None) -> _DictLookup:
+        return HelperMethods.FrequencyDomainResults(self.handle, self.varID(varName), objectExtra)
+
+    def FrequencyDomainResultsProcess(
+        self, varName: str, objectExtra: Optional[ObjectExtra] = None
+    ) -> numpy.ndarray:
+        return HelperMethods.FrequencyDomainResultsProcess(self.handle, self.varID(varName), objectExtra)
+
+    def FrequencyDomainMPM(
+        self,
+        varName: str,
+        stormDurationHours: float,
+        objectExtra: Optional[ObjectExtra] = None,
+    ) -> float:
+        fdr = self.FrequencyDomainResults(varName, objectExtra)
+        return FrequencyDomainMPM(stormDurationHours * 3600.0, fdr.StdDev, fdr.Tz)  # type: ignore [attr-defined]
+
+    def AnalyseExtrema(
+        self,
+        varName: str,
+        period: PeriodArg = None,
+        objectExtra: Optional[ObjectExtra] = None,
+    ) -> _DictLookup:
+        return AnalyseExtrema(self.TimeHistory(varName, period, objectExtra))
+
+    def SpectralResponseRAO(self, varName: str, objectExtra: Optional[ObjectExtra] = None) -> GraphCurve:
+        varID = self.varID(varName)
+        NumOfGraphPoints = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetSpectralResponseGraph(self.handle, objectExtra, varID, NumOfGraphPoints, None, status)
+        _CheckStatus(status)
+        curve = _GraphCurve(NumOfGraphPoints.value)
+        _GetSpectralResponseGraph(self.handle, objectExtra, varID, NumOfGraphPoints, curve, status)
+        _CheckStatus(status)
+        return GraphCurve(*curve.data)
+
+    def SpectralDensity(
+        self,
+        varName: str,
+        period: PeriodArg = None,
+        objectExtra: Optional[ObjectExtra] = None,
+        fundamentalFrequency: Optional[float] = None,
+    ) -> GraphCurve:
+        if HelperMethods.IsFrequencyDomainDynamics(self.modelHandle):
+            varID = self.varID(varName)
+            NumOfGraphPoints = ctypes.c_int()
+            status = ctypes.c_int()
+            _GetFrequencyDomainSpectralDensityGraph(
+                self.handle, objectExtra, varID, NumOfGraphPoints, None, status
+            )
+            _CheckStatus(status)
+
+            curve = _GraphCurve(NumOfGraphPoints.value)
+            _GetFrequencyDomainSpectralDensityGraph(
+                self.handle, objectExtra, varID, NumOfGraphPoints, curve, status
+            )
+            _CheckStatus(status)
+            return GraphCurve(*curve.data)
+        else:
+            if fundamentalFrequency is None:
+                fundamentalFrequency = HelperMethods.GetSpectralDensityFundamentalFrequency(self.modelHandle)
+            return SpectralDensity(
+                self.SampleTimes(period),
+                self.TimeHistory(varName, period, objectExtra),
+                fundamentalFrequency,
+            )
+
+    def EmpiricalDistribution(
+        self,
+        varName: str,
+        period: PeriodArg = None,
+        objectExtra: Optional[ObjectExtra] = None,
+    ) -> GraphCurve:
+        return EmpiricalDistribution(self.TimeHistory(varName, period, objectExtra))
+
+    def RainflowHalfCycles(
+        self,
+        varName: str,
+        period: PeriodArg = None,
+        objectExtra: Optional[ObjectExtra] = None,
+    ) -> numpy.ndarray:
+        return RainflowHalfCycles(self.TimeHistory(varName, period, objectExtra))
+
+    def UnorderedRainflowHalfCycles(
+        self,
+        varName: str,
+        period: PeriodArg = None,
+        objectExtra: Optional[ObjectExtra] = None,
+    ) -> numpy.ndarray:
+        return UnorderedRainflowHalfCycles(self.TimeHistory(varName, period, objectExtra))
+
+    def RainflowAssociatedMean(
+        self,
+        varName: str,
+        period: PeriodArg = None,
+        objectExtra: Optional[ObjectExtra] = None,
+    ) -> _DictLookup:
+        return RainflowAssociatedMean(self.TimeHistory(varName, period, objectExtra))
+
+    def CycleHistogramBins(
+        self,
+        varName: str,
+        period: PeriodArg = None,
+        objectExtra: Optional[ObjectExtra] = None,
+        binSize: Optional[float] = None,
+    ) -> Tuple[CycleBin, ...]:
+        halfCycles = self.UnorderedRainflowHalfCycles(varName, period, objectExtra)
+        return CycleHistogramBins(halfCycles, binSize)
+
+    def SaveSummaryResults(
+        self, filename: Union[str, os.PathLike], abbreviated: Optional[bool] = True
+    ) -> None:
+        spreadsheetType = SpreadsheetType.SummaryResults if abbreviated else SpreadsheetType.FullResults
+        HelperMethods.SaveSpreadsheet(self.handle, spreadsheetType, filename)
+
+    def SaveSummaryResultsMem(
+        self,
+        spreadsheetFileType: SpreadsheetFileType = SpreadsheetFileType.Xlsx,
+        abbreviated: Optional[bool] = True,
+    ) -> bytes:
+        spreadsheetType = SpreadsheetType.SummaryResults if abbreviated else SpreadsheetType.FullResults
+        return HelperMethods.SaveSpreadsheetMem(self.handle, spreadsheetType, spreadsheetFileType)
+
+    # deprecated, use SaveSummaryResults(filename, False) instead
+    def SaveFullResults(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveSpreadsheet(self.handle, SpreadsheetType.FullResults, filename)
+
+    def SaveDetailedPropertiesReport(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveSpreadsheet(self.handle, SpreadsheetType.DetailedProperties, filename)
+
+    def SaveDetailedPropertiesReportMem(
+        self, spreadsheetFileType: SpreadsheetFileType = SpreadsheetFileType.Xlsx
+    ) -> bytes:
+        return HelperMethods.SaveSpreadsheetMem(
+            self.handle, SpreadsheetType.DetailedProperties, spreadsheetFileType
+        )
+
+
+class OrcaFlexRangeGraphObject(OrcaFlexObject):
+    def RangeGraphXaxis(
+        self,
+        varName: str,
+        arclengthRange: Optional[ArclengthRange] = None,
+        period: PeriodArg = None,
+    ) -> numpy.ndarray:
+        varID = self.varID(varName)
+
+        if period is None and HelperMethods.IsFrequencyDomainDynamics(self.modelHandle):
+            period = Period(PeriodNum.StaticState)  # so that it doesn't default to whole simulation
+        else:
+            period = HelperMethods.PreparePeriod(self.modelHandle, period)
+
+        pointCount = HelperMethods.RangeGraphPointCount(self.handle, self.type, varID, arclengthRange, period)
+        x = _allocateArray(pointCount)
+
+        objectExtra = oeTurbine(1)  # we need a valid blade index for turbines
+        status = ctypes.c_int()
+        if arclengthRange is None:  # support 9.1 and earlier
+            _GetRangeGraph3(
+                self.handle,
+                objectExtra,
+                period,
+                varID,
+                x,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                status,
+            )
+        else:
+            _GetRangeGraph4(
+                self.handle,
+                objectExtra,
+                period,
+                arclengthRange,
+                varID,
+                x,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                status,
+            )
+        _CheckStatus(status)
+        return x
+
+    def RangeGraph(
+        self,
+        varName: str,
+        period: PeriodArg = None,
+        objectExtra: Optional[ObjectExtra] = None,
+        arclengthRange: Optional[ArclengthRange] = None,
+        stormDurationHours: Optional[float] = None,
+    ) -> _DictLookup:
+        def allocIfCurveAvailable(curveName, pointCount):
+            if hasattr(curveNames, curveName):
+                return _allocateArray(pointCount)
+            else:
+                return None
+
+        def frequencyDomainRangeGraph(period, objectExtra, arclengthRange, stormDurationHours):
+            def objectExtraAtArclength(X):
+                if objectExtra is None:
+                    result = oeArcLength(X)
+                else:
+                    result = ObjectExtra()
+                    # clone objectExtra, see http://stackoverflow.com/q/1470343/
+                    ctypes.pointer(result)[0] = objectExtra
+                    result.LinePoint = LinePoint.ArcLength
+                    result.ArcLength = X
+                return result
+
+            staticStateRangeGraph = self.RangeGraph(
+                varName, PeriodNum.StaticState, objectExtra, arclengthRange
+            )
+            fdr = [
+                HelperMethods.FrequencyDomainResults(self.handle, varID, objectExtraAtArclength(X))
+                for X in staticStateRangeGraph.X
+            ]
+            resultDict = {
+                "X": staticStateRangeGraph.X,
+                "StaticValue": staticStateRangeGraph.Mean,
+                "StdDev": _array([item.StdDev for item in fdr]),
+                "Upper": staticStateRangeGraph.Upper,
+                "Lower": staticStateRangeGraph.Lower,
+            }
+            if stormDurationHours is not None:
+                resultDict["MPM"] = _array(
+                    [FrequencyDomainMPM(stormDurationHours * 3600.0, item.StdDev, item.Tz) for item in fdr]
+                )
+            return objectFromDict(resultDict)
+
+        varID = self.varID(varName)
+        period = HelperMethods.PreparePeriod(self.modelHandle, period)
+        if (
+            HelperMethods.IsFrequencyDomainDynamics(self.modelHandle)
+            and period.PeriodNum == PeriodNum.WholeSimulation
+        ):
+            return frequencyDomainRangeGraph(period, objectExtra, arclengthRange, stormDurationHours)
+
+        curveNames = RangeGraphCurveNames()
+        status = ctypes.c_int()
+        _GetRangeGraphCurveNames(self.handle, objectExtra, period, varID, curveNames, status)
+        _CheckStatus(status)
+
+        pointCount = HelperMethods.RangeGraphPointCount(self.handle, self.type, varID, arclengthRange, period)
+        x = _allocateArray(pointCount)
+        min = allocIfCurveAvailable("Min", pointCount)
+        max = allocIfCurveAvailable("Max", pointCount)
+        mean = allocIfCurveAvailable("Mean", pointCount)
+        stddev = allocIfCurveAvailable("StdDev", pointCount)
+        upper = allocIfCurveAvailable("Upper", pointCount)
+        lower = allocIfCurveAvailable("Lower", pointCount)
+        if arclengthRange is None:  # support 9.1 and earlier
+            _GetRangeGraph3(
+                self.handle,
+                objectExtra,
+                period,
+                varID,
+                x,
+                min,
+                max,
+                mean,
+                stddev,
+                upper,
+                lower,
+                status,
+            )
+        else:
+            _GetRangeGraph4(
+                self.handle,
+                objectExtra,
+                period,
+                arclengthRange,
+                varID,
+                x,
+                min,
+                max,
+                mean,
+                stddev,
+                upper,
+                lower,
+                status,
+            )
+        _CheckStatus(status)
+
+        return objectFromDict(
+            {
+                "X": x,
+                "Min": min,
+                "Max": max,
+                "Mean": mean,
+                "StdDev": stddev,
+                "Upper": upper,
+                "Lower": lower,
+            }
+        )
+
+    def RangeGraphCollated(
+        self,
+        varName: str,
+        period: PeriodArg = None,
+        objectExtra: Optional[ObjectExtra] = None,
+        arclengthRange: Optional[ArclengthRange] = None,
+        restartModels: Optional[Iterable[int]] = None,
+    ) -> _DictLookup:
+        with CollatedResults(self.modelHandle, period, restartModels) as collatedResults:
+            return collatedResults.RangeGraph(self, varName, objectExtra, arclengthRange)
+
+
+class OrcaFlexLineObject(OrcaFlexRangeGraphObject):
+    def lineTypeAt(self, arclength: float) -> OrcaFlexObject:
+        sectionLength = self.CumulativeLength
+        index = 0
+        count = len(sectionLength)
+        while index < count - 1:
+            if arclength <= sectionLength[index]:
+                break
+            else:
+                index += 1
+        objectInfo = HelperMethods.ObjectCalled(self.modelHandle, self.LineType[index])
+        return HelperMethods.CreateOrcaFlexObject(
+            self.modelHandle, objectInfo.ObjectHandle, ObjectType(objectInfo.ObjectType)
+        )
+
+    def NearestNodeArclength(self, targetArclength: float) -> float:
+        actualArclength = ctypes.c_double()
+        status = ctypes.c_int()
+        _GetNearestNodeArclength(self.handle, targetArclength, actualArclength, status)
+        _CheckStatus(status)
+        return actualArclength.value
+
+    @property
+    def NodeArclengths(self) -> numpy.ndarray:
+        count = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetNodeArclengths(self.handle, None, count, status)
+        _CheckStatus(status)
+        arclengths = _allocateArray(count.value)
+        _GetNodeArclengths(self.handle, arclengths, None, status)
+        _CheckStatus(status)
+        return arclengths
+
+    @property
+    def EulerBucklingLimitExceeded(self) -> bool:
+        assert _supportsGetModelProperty()
+        return HelperMethods.GetBooleanModelProperty(
+            self.handle, ModelPropertyId.EulerBucklingLimitExceededForLine
+        )
+
+    def SaveShear7datFile(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7dat)
+
+    def SaveShear7mdsFile(
+        self,
+        filename: Union[str, os.PathLike],
+        firstMode: int = -1,
+        lastMode: int = -1,
+        includeCoupledObjects: bool = False,
+    ) -> None:
+        params = Shear7MdsFileParameters(firstMode, lastMode, includeCoupledObjects)
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7mds, params)
+
+    def SaveShear7catFile(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7cat)
+
+    def SaveShear7inhystFile(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7inhyst)
+
+    def SaveShear7outFile(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7out)
+
+    def SaveShear7out1File(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7out1)
+
+    def SaveShear7out2File(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7out2)
+
+    def SaveShear7pltFile(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7plt)
+
+    def SaveShear7anmFile(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7anm)
+
+    def SaveShear7dmgFile(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7dmg)
+
+    def SaveShear7fatFile(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7fat)
+
+    def SaveShear7strFile(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7str)
+
+    def SaveShear7curvFile(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7curv)
+
+    def SaveShear7zetahystFile(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7zetahyst)
+
+    def SaveShear7sthFile(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7sth)
+
+    def SaveShear7dthFile(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, filename, ExternalFileType.Shear7dth)
+
+    def SaveShear7allOutputFiles(self, basename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, basename, ExternalFileType.Shear7allOutput)
+
+    def SaveVIVAInputFiles(self, dirname: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, dirname, ExternalFileType.VIVAInput)
+
+    def SaveVIVAOutputFiles(self, basename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveExternalFile(self.handle, basename, ExternalFileType.VIVAOutput)
+
+    def SaveVIVAModesFiles(
+        self,
+        dirname: Union[str, os.PathLike],
+        firstMode: int = -1,
+        lastMode: int = -1,
+        includeCoupledObjects: bool = False,
+    ) -> None:
+        params = VIVAModesFilesParameters(firstMode, lastMode, includeCoupledObjects)
+        HelperMethods.SaveExternalFile(self.handle, dirname, ExternalFileType.VIVAModes, params)
+
+    def SaveLineClashingReport(self, filename: Union[str, os.PathLike], period: PeriodArg = None) -> None:
+        parameters = LineClashingReportParameters()
+        parameters.Period = HelperMethods.PreparePeriod(self.modelHandle, period)
+        HelperMethods.SaveSpreadsheet(self.handle, SpreadsheetType.LineClashingReport, filename, parameters)
+
+    def SaveLineClashingReportMem(
+        self,
+        spreadsheetFileType: SpreadsheetFileType = SpreadsheetFileType.Xlsx,
+        period: PeriodArg = None,
+    ) -> bytes:
+        parameters = LineClashingReportParameters()
+        parameters.Period = HelperMethods.PreparePeriod(self.modelHandle, period)
+        return HelperMethods.SaveSpreadsheetMem(
+            self.handle,
+            SpreadsheetType.LineClashingReport,
+            spreadsheetFileType,
+            parameters,
+        )
+
+
+class OrcaFlexVesselObject(OrcaFlexObject):
+    def SaveDisplacementRAOsSpreadsheet(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveSpreadsheet(self.handle, SpreadsheetType.VesselDisplacementRAOs, filename)
+
+    def SaveDisplacementRAOsSpreadsheetMem(
+        self, spreadsheetFileType: SpreadsheetFileType = SpreadsheetFileType.Xlsx
+    ) -> bytes:
+        return HelperMethods.SaveSpreadsheetMem(
+            self.handle, SpreadsheetType.VesselDisplacementRAOs, spreadsheetFileType
+        )
+
+    def SaveSpectralResponseSpreadsheet(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveSpreadsheet(self.handle, SpreadsheetType.VesselSpectralResponse, filename)
+
+    def SaveSpectralResponseSpreadsheetMem(
+        self, spreadsheetFileType: SpreadsheetFileType = SpreadsheetFileType.Xlsx
+    ) -> bytes:
+        return HelperMethods.SaveSpreadsheetMem(
+            self.handle, SpreadsheetType.VesselSpectralResponse, spreadsheetFileType
+        )
+
+    def SaveSupportGeometryTable(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveSpreadsheet(self.handle, SpreadsheetType.SupportGeometryTable, filename)
+
+    def SaveSupportGeometryTableMem(
+        self, spreadsheetFileType: SpreadsheetFileType = SpreadsheetFileType.Xlsx
+    ) -> bytes:
+        return HelperMethods.SaveSpreadsheetMem(
+            self.handle, SpreadsheetType.SupportGeometryTable, spreadsheetFileType
+        )
+
+    def SaveAirGapReport(self, filename: Union[str, os.PathLike], period: PeriodArg = None) -> None:
+        parameters = AirGapReportParameters()
+        parameters.Period = HelperMethods.PreparePeriod(self.modelHandle, period)
+        HelperMethods.SaveSpreadsheet(self.handle, SpreadsheetType.AirGapReport, filename, parameters)
+
+    def SaveAirGapReportMem(
+        self,
+        spreadsheetFileType: SpreadsheetFileType = SpreadsheetFileType.Xlsx,
+        period: PeriodArg = None,
+    ) -> bytes:
+        parameters = AirGapReportParameters()
+        parameters.Period = HelperMethods.PreparePeriod(self.modelHandle, period)
+        return HelperMethods.SaveSpreadsheetMem(
+            self.handle, SpreadsheetType.AirGapReport, spreadsheetFileType, parameters
+        )
+
+    @property
+    def AirGapPointsSpecifications(self) -> Sequence[_DictLookup]:
+        return [
+            TimeHistorySpecification(self, "Air gap", oeAirGap((x, y, z), factor))
+            for x, y, z, factor in zip(
+                self.AirGapPointX,
+                self.AirGapPointY,
+                self.AirGapPointZ,
+                self.SeaSurfaceScalingFactor,
+            )
+        ]
+
+
+class OrcaFlex6DBuoyObject(OrcaFlexObject):
+    def SaveSupportGeometryTable(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveSpreadsheet(
+            self.handle,
+            SpreadsheetType.SupportGeometryTable,
+            filename,
+        )
+
+    def SaveSupportGeometryTableMem(
+        self, spreadsheetFileType: SpreadsheetFileType = SpreadsheetFileType.Xlsx
+    ) -> bytes:
+        return HelperMethods.SaveSpreadsheetMem(
+            self.handle, SpreadsheetType.SupportGeometryTable, spreadsheetFileType
+        )
+
+
+class OrcaFlexTurbineObject(OrcaFlexRangeGraphObject):
+    def NearestBladeNodeArclength(self, targetArclength: float) -> float:
+        actualArclength = ctypes.c_double()
+        status = ctypes.c_int()
+        _GetNearestNodeArclength(self.handle, targetArclength, actualArclength, status)
+        _CheckStatus(status)
+        return actualArclength.value
+
+    @property
+    def BladeNodeArclengths(self) -> numpy.ndarray:
+        count = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetNodeArclengths(self.handle, None, count, status)
+        _CheckStatus(status)
+        arclengths = _allocateArray(count.value)
+        _GetNodeArclengths(self.handle, arclengths, None, status)
+        _CheckStatus(status)
+        return arclengths
+
+
+class OrcaFlexWizardObject(OrcaFlexObject):
+    def InvokeWizard(self) -> None:
+        status = ctypes.c_int()
+        _InvokeWizard(self.handle, status)
+        _CheckStatus(status)
+
+
+class FatigueAnalysis(DataObject):
+    def __init__(self, filename: Optional[str] = None, threadCount: Optional[int] = None) -> None:
+        handle = Handle()
+        status = ctypes.c_int()
+        _CreateFatigue(handle, status)
+        _CheckStatus(status)
+        super().__init__(handle)
+        self.progressHandler = None
+        if filename:
+            self.Load(filename)
+        if threadCount is not None:
+            self.threadCount = threadCount
+
+    def __del__(self) -> None:
+        try:
+            _DestroyFatigue(self.handle, ctypes.c_int())
+            # no point checking status here since we can't really do anything about a failure
+        # swallow this since we get exceptions when Python terminates unexpectedly (e.g. CTRL+Z)
+        except BaseException:
+            pass
+
+    def isBuiltInAttribute(self, name: str) -> bool:
+        return name in (
+            "progressHandler",
+            "threadCount",
+            "latestFileName",
+        ) or DataObject.isBuiltInAttribute(self, name)
+
+    @property
+    def threadCount(self) -> int:
+        return HelperMethods.GetModelThreadCount(self.handle)
+
+    @threadCount.setter
+    def threadCount(self, value: int) -> None:
+        HelperMethods.SetModelThreadCount(self.handle, value)
+
+    @property
+    def latestFileName(self) -> str:
+        return HelperMethods.GetDataStringNotNone(self.handle, "LatestFileName", 0)
+
+    @latestFileName.setter
+    def latestFileName(self, value: Union[str, os.PathLike]) -> None:
+        HelperMethods.SetDataString(self.handle, "LatestFileName", 0, str(value))
+
+    def Load(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.FileOperation(self.handle, _LoadFatigue, filename)
+
+    def LoadMem(self, buffer: bytes, dataFileType: DataFileType = DataFileType.Binary) -> None:
+        status = ctypes.c_int()
+        _LoadFatigueMem(self.handle, dataFileType.value, buffer, len(buffer), status)
+        _CheckStatus(status)
+
+    def Save(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.FileOperation(self.handle, _SaveFatigue, filename)
+
+    def SaveMem(self, dataFileType: DataFileType = DataFileType.Binary) -> bytes:
+        status = ctypes.c_int()
+        buffer = Handle()
+        bufferLen = ctypes.c_int64()
+        _SaveFatigueMem(self.handle, dataFileType.value, buffer, bufferLen, status)
+        _CheckStatus(status)
+        return HelperMethods.CopyAndFreeBuffer(buffer, bufferLen.value)
+
+    def Calculate(self, resultsFileName: Union[str, os.PathLike, None] = None) -> None:
+        if self.progressHandler:
+
+            def callback(handle, progress, cancel):
+                cancel[0] = HelperMethods.ProgressCallbackCancel(self.progressHandler(self, progress))
+
+            progress = _StringProgressHandlerProc(callback)
+        else:
+            progress = None
+        if resultsFileName is not None:
+            resultsFileName = str(resultsFileName)
+        status = ctypes.c_int()
+        _CalculateFatigue(self.handle, resultsFileName, progress, status)
+        _CheckStatus(status)
+
+    @property
+    def outputPointDetails(self) -> Optional[numpy.ndarray]:
+        damageCalculation = self.DamageCalculation
+        if damageCalculation == "Homogeneous pipe stress":
+            return HelperMethods.FatigueHomogeneousPipeOutputPointDetails(self.handle)
+        if damageCalculation == "Stress factors" or damageCalculation == "Externally calculated stress":
+            return HelperMethods.FatigueComponentOutputPointDetails(self.handle)
+        if damageCalculation == "Mooring":
+            return HelperMethods.FatigueMooringOutputPointDetails(self.handle)
+        if damageCalculation == "SHEAR7":
+            return HelperMethods.FatigueShear7OutputPointDetails(self.handle)
+        if damageCalculation == "Histograms":
+            return HelperMethods.FatigueHistogramOutputPointDetails(self.handle)
+        raise NotImplementedError("Unrecognised damage calculation")
+
+    @property
+    def theta(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.FatigueDoubleArray(self.handle, FatigueOutputType.Theta)
+
+    @property
+    def loadCaseDamage(self) -> Optional[numpy.ndarray]:
+        damageCalculation = self.DamageCalculation
+        if damageCalculation == "Histograms":
+            raise NotImplementedError("Load case damage is not available for histograms")
+        if damageCalculation == "SHEAR7":
+            return HelperMethods.FatigueShear7LoadCaseDamage(self.handle)
+        analysisType = self.AnalysisType
+        if analysisType == "Regular" or analysisType == "Rainflow":
+            return HelperMethods.FatigueDeterministicLoadCaseDamage(self.handle)
+        if analysisType == "Spectral (frequency domain)" or analysisType == "Spectral (response RAOs)":
+            return HelperMethods.FatigueSpectralLoadCaseDamage(self.handle)
+        raise NotImplementedError("Unrecognised combination of damage calculation and analysis type")
+
+    @property
+    def overallDamage(self) -> Optional[numpy.ndarray]:
+        damageCalculation = self.DamageCalculation
+        if damageCalculation == "Histograms":
+            raise NotImplementedError("Overall damage is not available for histograms")
+        return HelperMethods.FatigueOverallDamage(self.handle)
+
+    @property
+    def bins(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.FatigueDoubleArray(self.handle, FatigueOutputType.HistogramBins)
+
+    @property
+    def loadCaseCycleRate(self) -> Optional[numpy.ndarray]:
+        damageCalculation = self.DamageCalculation
+        if damageCalculation != "Histograms":
+            raise NotImplementedError("Histogram cycle rate is only available for histograms")
+        loadCaseCount = HelperMethods.FatigueLoadCaseCount(self.handle)
+        return HelperMethods.FatigueCycleRate(
+            self.handle, FatigueOutputType.HistogramLoadCaseCycleRate, loadCaseCount
+        )
+
+    @property
+    def combinedCycleRate(self) -> Optional[numpy.ndarray]:
+        damageCalculation = self.DamageCalculation
+        if damageCalculation != "Histograms":
+            raise NotImplementedError("Histogram cycle rate is only available for histograms")
+        return HelperMethods.FatigueCycleRate(self.handle, FatigueOutputType.HistogramCombinedCycleRate, None)
+
+
+class WaveScatter(DataObject):
+    def __init__(self, filename: Optional[str] = None) -> None:
+        handle = Handle()
+        status = ctypes.c_int()
+        _CreateWaveScatter(handle, status)
+        _CheckStatus(status)
+        super().__init__(handle)
+        if filename:
+            self.Load(filename)
+
+    def __del__(self) -> None:
+        try:
+            _DestroyWaveScatter(self.handle, ctypes.c_int())
+            # no point checking status here since we can't really do anything about a failure
+        # swallow this since we get exceptions when Python terminates unexpectedly (e.g. CTRL+Z)
+        except BaseException:
+            pass
+
+    def isBuiltInAttribute(self, name: str) -> bool:
+        return name == "latestFileName" or DataObject.isBuiltInAttribute(self, name)
+
+    @property
+    def latestFileName(self) -> str:
+        return HelperMethods.GetDataStringNotNone(self.handle, "LatestFileName", 0)
+
+    @latestFileName.setter
+    def latestFileName(self, value: Union[str, os.PathLike]) -> None:
+        HelperMethods.SetDataString(self.handle, "LatestFileName", 0, str(value))
+
+    def Load(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.FileOperation(self.handle, _LoadWaveScatter, filename)
+
+    def LoadMem(self, buffer: bytes, dataFileType: DataFileType = DataFileType.Binary) -> None:
+        status = ctypes.c_int()
+        _LoadWaveScatterMem(self.handle, dataFileType.value, buffer, len(buffer), status)
+        _CheckStatus(status)
+
+    def Save(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.FileOperation(self.handle, _SaveWaveScatter, filename)
+
+    def SaveMem(self, dataFileType: DataFileType = DataFileType.Binary) -> bytes:
+        status = ctypes.c_int()
+        buffer = Handle()
+        bufferLen = ctypes.c_int64()
+        _SaveWaveScatterMem(self.handle, dataFileType.value, buffer, bufferLen, status)
+        _CheckStatus(status)
+        return HelperMethods.CopyAndFreeBuffer(buffer, bufferLen.value)
+
+    @property
+    def scatterTable(self) -> _DictLookup:
+        status = ctypes.c_int()
+        totalProbability = ctypes.c_double()
+        TbinCount = self.NumberOfWavePeriods
+        HbinCount = self.NumberOfWaveHeights
+        if TbinCount is not None and HbinCount is not None:
+            Tbins = (WaveScatterBin * TbinCount)()
+            Hbins = (WaveScatterBin * HbinCount)()
+            occurrences = _allocateArray(HbinCount * TbinCount)
+        else:
+            # the call to _GetWaveScatterTable will fail, but it does so with an informative error message
+            Hbins = None
+            Tbins = None
+            occurrences = None
+        _GetWaveScatterTable(self.handle, Tbins, Hbins, occurrences, totalProbability, status)
+        _CheckStatus(status)
+        return objectFromDict(
+            {
+                "Tbins": [bin.asObject() for bin in Tbins],
+                "Hbins": [bin.asObject() for bin in Hbins],
+                "Occurrences": numpy.reshape(occurrences, (HbinCount, TbinCount), "F"),  # type: ignore [arg-type]
+                "TotalProbability": totalProbability.value,
+            }
+        )
+
+    def SaveBatchScript(self, filename: Union[str, os.PathLike]) -> None:
+        status = ctypes.c_int()
+        spec = WaveScatterAutomationSpecification()
+        spec.BatchScriptFileName = str(filename)
+        _SaveWaveScatterAutomationFiles(self.handle, spec, status)
+        _CheckStatus(status)
+
+    def SaveTextDataFiles(self, path: Union[str, os.PathLike]) -> None:
+        status = ctypes.c_int()
+        spec = WaveScatterAutomationSpecification()
+        spec.TextDataFilePath = str(path)
+        _SaveWaveScatterAutomationFiles(self.handle, spec, status)
+        _CheckStatus(status)
+
+    def SaveFatigueAnalysisFile(
+        self,
+        filename: Union[str, os.PathLike],
+        loadCaseSimulationPath: Union[str, os.PathLike, None] = None,
+    ) -> None:
+        status = ctypes.c_int()
+        spec = WaveScatterAutomationSpecification()
+        spec.FatigueAnalysisFileName = str(filename)
+        spec.FatigueLoadCaseSimulationPath = (
+            None if loadCaseSimulationPath is None else str(loadCaseSimulationPath)
+        )
+        _SaveWaveScatterAutomationFiles(self.handle, spec, status)
+        _CheckStatus(status)
+
+
+class Diffraction(DataObject):
+    def __init__(
+        self, filename: Union[str, os.PathLike, None] = None, threadCount: Optional[int] = None
+    ) -> None:
+        handle = Handle()
+        status = ctypes.c_int()
+        _CreateDiffraction(handle, status)
+        _CheckStatus(status)
+        super().__init__(handle)
+        self.progressHandler = None
+        self.calculationProgressHandler = None
+        if filename is not None:
+            status = ctypes.c_int()
+            _LoadDiffractionResults(handle, str(filename), status)
+            if status.value != StatusCode.OK:
+                _LoadDiffractionData(handle, str(filename), status)
+                _CheckStatus(status)
+        if threadCount is not None:
+            self.threadCount = threadCount
+
+    def __del__(self) -> None:
+        try:
+            _DestroyDiffraction(self.handle, ctypes.c_int())
+            # no point checking status here since we can't really do anything about a failure
+        # swallow this since we get exceptions when Python terminates unexpectedly (e.g. CTRL+Z)
+        except BaseException:
+            pass
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if name == "progressHandler":
+            status = ctypes.c_int()
+            if self.progressHandler:
+
+                def callback(handle, progress, cancel):
+                    cancel[0] = HelperMethods.ProgressCallbackCancel(self.progressHandler(self, progress))
+
+                self.progressHandlerCallback = _ProgressHandlerProc(callback)
+            else:
+                self.progressHandlerCallback = None
+            _SetDiffractionProgressHandler(self.handle, self.progressHandlerCallback, status)
+            _CheckStatus(status)
+
+    def isBuiltInAttribute(self, name: str) -> bool:
+        return name in (
+            "progressHandler",
+            "progressHandlerCallback",
+            "calculationProgressHandler",
+            "threadCount",
+            "latestFileName",
+            "type",
+        ) or DataObject.isBuiltInAttribute(self, name)
+
+    @property
+    def threadCount(self) -> int:
+        return HelperMethods.GetModelThreadCount(self.handle)
+
+    @threadCount.setter
+    def threadCount(self, value: int) -> None:
+        HelperMethods.SetModelThreadCount(self.handle, value)
+
+    @property
+    def latestFileName(self) -> str:
+        return HelperMethods.GetDataStringNotNone(self.handle, "LatestFileName", 0)
+
+    @latestFileName.setter
+    def latestFileName(self, value: Union[str, os.PathLike]) -> None:
+        HelperMethods.SetDataString(self.handle, "LatestFileName", 0, str(value))
+
+    @property
+    def type(self) -> ModelType:
+        return ModelType(self.ModelType)
+
+    @type.setter
+    def type(self, value: ModelType) -> None:
+        self.ModelType = value.value
+
+    @property
+    def state(self) -> DiffractionState:
+        state = ctypes.c_int()
+        status = ctypes.c_int()
+        _GetDiffractionState(self.handle, state, status)
+        _CheckStatus(status)
+        return DiffractionState(state.value)
+
+    def Reset(self) -> None:
+        status = ctypes.c_int()
+        _ResetDiffraction(self.handle, status)
+        _CheckStatus(status)
+
+    def Clear(self) -> None:
+        status = ctypes.c_int()
+        _ClearDiffraction(self.handle, status)
+        _CheckStatus(status)
+
+    def NewVariationModel(self, parentFileName: Union[str, os.PathLike]) -> None:
+        status = ctypes.c_int()
+        _NewDiffraction(self.handle, NewModelParams(ModelType.Variation, parentFileName), status)
+        _CheckStatus(status)
+
+    def NewRestartAnalysis(self, parentFileName: Union[str, os.PathLike]) -> None:
+        status = ctypes.c_int()
+        _NewDiffraction(self.handle, NewModelParams(ModelType.Restart, parentFileName), status)
+        _CheckStatus(status)
+
+    def SaveAutoGeneratedControlSurfaceMesh(self, filename: Union[str, os.PathLike]) -> None:
+        status = ctypes.c_int()
+        _SaveDiffractionMesh(self.handle, ExportedMeshType.AutoGeneratedControlSurface, filename, status)
+        _CheckStatus(status)
+
+    def SaveAutoGeneratedFreeSurfacePanelledZoneMesh(self, filename: Union[str, os.PathLike]) -> None:
+        status = ctypes.c_int()
+        _SaveDiffractionMesh(
+            self.handle, ExportedMeshType.AutoGeneratedFreeSurfacePanelledZone, filename, status
+        )
+        _CheckStatus(status)
+
+    def LoadData(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.FileOperation(self.handle, _LoadDiffractionData, filename)
+
+    def LoadDataMem(self, buffer: bytes, dataFileType: DataFileType = DataFileType.Binary) -> None:
+        status = ctypes.c_int()
+        _LoadDiffractionDataMem(self.handle, dataFileType.value, buffer, len(buffer), status)
+        _CheckStatus(status)
+
+    def LoadResults(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.FileOperation(self.handle, _LoadDiffractionResults, filename)
+
+    def LoadResultsMem(self, buffer: bytes) -> None:
+        status = ctypes.c_int()
+        _LoadDiffractionResultsMem(self.handle, buffer, len(buffer), status)
+        _CheckStatus(status)
+
+    def SaveData(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.FileOperation(self.handle, _SaveDiffractionData, filename)
+
+    def SaveDataMem(self, dataFileType: DataFileType = DataFileType.Binary) -> bytes:
+        status = ctypes.c_int()
+        buffer = Handle()
+        bufferLen = ctypes.c_int64()
+        _SaveDiffractionDataMem(self.handle, dataFileType.value, buffer, bufferLen, status)
+        _CheckStatus(status)
+        return HelperMethods.CopyAndFreeBuffer(buffer, bufferLen.value)
+
+    def SaveResults(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.FileOperation(self.handle, _SaveDiffractionResults, filename)
+
+    def SaveResultsMem(self) -> bytes:
+        status = ctypes.c_int()
+        buffer = Handle()
+        bufferLen = ctypes.c_int64()
+        _SaveDiffractionResultsMem(self.handle, buffer, bufferLen, status)
+        _CheckStatus(status)
+        return HelperMethods.CopyAndFreeBuffer(buffer, bufferLen.value)
+
+    def Calculate(self) -> None:
+        if self.calculationProgressHandler:
+
+            def callback(handle, progress, cancel):
+                cancel[0] = HelperMethods.ProgressCallbackCancel(
+                    self.calculationProgressHandler(self, progress)
+                )
+
+            progress = _StringProgressHandlerProc(callback)
+        else:
+            progress = None
+        status = ctypes.c_int()
+        _CalculateDiffraction(self.handle, progress, status)
+        _CheckStatus(status)
+
+    def SaveWaveComponentsSpreadsheet(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveSpreadsheet(self.handle, SpreadsheetType.DiffractionWaveComponents, filename)
+
+    def SaveWaveComponentsSpreadsheetMem(
+        self, spreadsheetFileType: SpreadsheetFileType = SpreadsheetFileType.Xlsx
+    ) -> bytes:
+        return HelperMethods.SaveSpreadsheetMem(
+            self.handle, SpreadsheetType.DiffractionWaveComponents, spreadsheetFileType
+        )
+
+    def SaveMeshDetailsSpreadsheet(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveSpreadsheet(self.handle, SpreadsheetType.DiffractionMeshDetails, filename)
+
+    def SaveMeshDetailsSpreadsheetMem(
+        self, spreadsheetFileType: SpreadsheetFileType = SpreadsheetFileType.Xlsx
+    ) -> bytes:
+        return HelperMethods.SaveSpreadsheetMem(
+            self.handle, SpreadsheetType.DiffractionMeshDetails, spreadsheetFileType
+        )
+
+    def SaveResultsSpreadsheet(self, filename: Union[str, os.PathLike]) -> None:
+        HelperMethods.SaveSpreadsheet(self.handle, SpreadsheetType.DiffractionResults, filename)
+
+    def SaveResultsSpreadsheetMem(
+        self, spreadsheetFileType: SpreadsheetFileType = SpreadsheetFileType.Xlsx
+    ) -> bytes:
+        return HelperMethods.SaveSpreadsheetMem(
+            self.handle, SpreadsheetType.DiffractionResults, spreadsheetFileType
+        )
+
+    @property
+    def waveComponents(self) -> Tuple[_DictLookup, ...]:
+        def componentGenerator():
+            count = ctypes.c_int()
+            status = ctypes.c_int()
+
+            _GetDiffractionWaveComponents(self.handle, count, None, status)
+            _CheckStatus(status)
+
+            components = (DiffractionWaveComponent * count.value)()
+            _GetDiffractionWaveComponents(self.handle, count, components, status)
+            _CheckStatus(status)
+
+            for component in components:
+                obj = component.asObject()
+                obj.Period = 1 / obj.Frequency
+                obj.WaveLength = 2 * numpy.pi / obj.WaveNumber
+                yield obj
+
+        return tuple(componentGenerator())
+
+    @property
+    def headings(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.DiffractionDoubleArray(self.handle, DiffractionOutputType.Headings)
+
+    @property
+    def frequencies(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.DiffractionDoubleArray(self.handle, DiffractionOutputType.Frequencies)
+
+    @property
+    def angularFrequencies(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.DiffractionDoubleArray(self.handle, DiffractionOutputType.AngularFrequencies)
+
+    @property
+    def periods(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.DiffractionDoubleArray(self.handle, DiffractionOutputType.Periods)
+
+    @property
+    def periodsOrFrequencies(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.DiffractionDoubleArray(self.handle, DiffractionOutputType.PeriodsOrFrequencies)
+
+    @property
+    def hydrostaticResults(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.HydrostaticResults(self.handle)
+
+    @property
+    def addedMass(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.AddedMassDamping(self.handle, DiffractionOutputType.AddedMass)
+
+    def addedMassRelativeTo(self, reportingOrigins: Union[numpy.ndarray, List]) -> Optional[numpy.ndarray]:
+        return HelperMethods.AddedMassDampingRelativeTo(
+            self.handle, DiffractionOutputType.AddedMass, reportingOrigins
+        )
+
+    @property
+    def infiniteFrequencyAddedMass(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.InfiniteFrequencyAddedMass(self.handle)
+
+    def infiniteFrequencyAddedMassRelativeTo(
+        self, reportingOrigins: Union[numpy.ndarray, List]
+    ) -> Optional[numpy.ndarray]:
+        return HelperMethods.InfiniteFrequencyAddedMassRelativeTo(self.handle, reportingOrigins)
+
+    @property
+    def damping(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.AddedMassDamping(self.handle, DiffractionOutputType.Damping)
+
+    def dampingRelativeTo(self, reportingOrigins: Union[numpy.ndarray, List]) -> Optional[numpy.ndarray]:
+        return HelperMethods.AddedMassDampingRelativeTo(
+            self.handle, DiffractionOutputType.Damping, reportingOrigins
+        )
+
+    @property
+    def loadRAOsHaskind(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.DiffractionRAOs(self.handle, DiffractionOutputType.LoadRAOsHaskind)
+
+    def loadRAOsHaskindRelativeTo(
+        self, reportingOrigins: Union[numpy.ndarray, List]
+    ) -> Optional[numpy.ndarray]:
+        return HelperMethods.DiffractionRAOsRelativeTo(
+            self.handle, DiffractionOutputType.LoadRAOsHaskind, reportingOrigins
+        )
+
+    @property
+    def loadRAOsDiffraction(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.DiffractionRAOs(self.handle, DiffractionOutputType.LoadRAOsDiffraction)
+
+    def loadRAOsDiffractionRelativeTo(
+        self, reportingOrigins: Union[numpy.ndarray, List]
+    ) -> Optional[numpy.ndarray]:
+        return HelperMethods.DiffractionRAOsRelativeTo(
+            self.handle, DiffractionOutputType.LoadRAOsDiffraction, reportingOrigins
+        )
+
+    @property
+    def displacementRAOs(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.DiffractionRAOs(self.handle, DiffractionOutputType.DisplacementRAOs)
+
+    def displacementRAOsRelativeTo(
+        self, reportingOrigins: Union[numpy.ndarray, List]
+    ) -> Optional[numpy.ndarray]:
+        return HelperMethods.DiffractionRAOsRelativeTo(
+            self.handle, DiffractionOutputType.DisplacementRAOs, reportingOrigins
+        )
+
+    @property
+    def meanDriftHeadingPairs(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.QTFHeadingsOrPeriodsOrFrequencies(
+            self.handle, DiffractionOutputType.MeanDriftHeadingPairs, 2
+        )
+
+    @property
+    def QTFHeadingPairs(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.QTFHeadingsOrPeriodsOrFrequencies(
+            self.handle, DiffractionOutputType.QTFHeadingPairs, 2
+        )
+
+    @property
+    def QTFFrequencies(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.QTFHeadingsOrPeriodsOrFrequencies(
+            self.handle, DiffractionOutputType.QTFFrequencies, 3
+        )
+
+    @property
+    def QTFAngularFrequencies(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.QTFHeadingsOrPeriodsOrFrequencies(
+            self.handle, DiffractionOutputType.QTFAngularFrequencies, 3
+        )
+
+    @property
+    def QTFPeriods(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.QTFHeadingsOrPeriodsOrFrequencies(
+            self.handle, DiffractionOutputType.QTFPeriods, 3
+        )
+
+    @property
+    def QTFPeriodsOrFrequencies(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.QTFHeadingsOrPeriodsOrFrequencies(
+            self.handle, DiffractionOutputType.QTFPeriodsOrFrequencies, 3
+        )
+
+    @property
+    def meanDriftLoadPressureIntegration(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.MeanDriftLoad(
+            self.handle, DiffractionOutputType.MeanDriftLoadPressureIntegration
+        )
+
+    @property
+    def meanDriftLoadControlSurface(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.MeanDriftLoad(self.handle, DiffractionOutputType.MeanDriftLoadControlSurface)
+
+    @property
+    def meanDriftLoadMomentumConservation(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.MeanDriftLoad(
+            self.handle, DiffractionOutputType.MeanDriftLoadMomentumConservation
+        )
+
+    @property
+    def fieldPointPressure(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.FieldPointOutput(self.handle, DiffractionOutputType.FieldPointPressure, 1)
+
+    @property
+    def fieldPointRAO(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.FieldPointOutput(self.handle, DiffractionOutputType.FieldPointRAO, 1)
+
+    @property
+    def fieldPointVelocity(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.FieldPointOutput(self.handle, DiffractionOutputType.FieldPointVelocity, 3)
+
+    @property
+    def fieldPointRAOGradient(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.FieldPointOutput(self.handle, DiffractionOutputType.FieldPointRAOGradient, 3)
+
+    @property
+    def panelGeometry(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.PanelGeometry(self.handle)
+
+    @property
+    def panelPressure(self) -> Optional[numpy.ndarray]:
+        outerCount = HelperMethods.DiffractionDoubleArrayLength(self.handle, DiffractionOutputType.Headings)
+        return HelperMethods.PanelPressureVelocity(
+            self.handle, DiffractionOutputType.PanelPressure, outerCount, 1
+        )
+
+    @property
+    def panelPressureDiffraction(self) -> Optional[numpy.ndarray]:
+        outerCount = HelperMethods.DiffractionDoubleArrayLength(self.handle, DiffractionOutputType.Headings)
+        return HelperMethods.PanelPressureVelocity(
+            self.handle, DiffractionOutputType.PanelPressureDiffraction, outerCount, 1
+        )
+
+    @property
+    def panelPressureRadiation(self) -> Optional[numpy.ndarray]:
+        outerCount = 6 * HelperMethods.DiffractionIncludedBodyCount(self.handle)
+        return HelperMethods.PanelPressureVelocity(
+            self.handle, DiffractionOutputType.PanelPressureRadiation, outerCount, 1
+        )
+
+    @property
+    def panelVelocity(self) -> Optional[numpy.ndarray]:
+        outerCount = HelperMethods.DiffractionDoubleArrayLength(self.handle, DiffractionOutputType.Headings)
+        return HelperMethods.PanelPressureVelocity(
+            self.handle, DiffractionOutputType.PanelVelocity, outerCount, 3
+        )
+
+    @property
+    def panelVelocityDiffraction(self) -> Optional[numpy.ndarray]:
+        outerCount = HelperMethods.DiffractionDoubleArrayLength(self.handle, DiffractionOutputType.Headings)
+        return HelperMethods.PanelPressureVelocity(
+            self.handle, DiffractionOutputType.PanelVelocityDiffraction, outerCount, 3
+        )
+
+    @property
+    def panelVelocityRadiation(self) -> Optional[numpy.ndarray]:
+        outerCount = 6 * HelperMethods.DiffractionIncludedBodyCount(self.handle)
+        return HelperMethods.PanelPressureVelocity(
+            self.handle, DiffractionOutputType.PanelVelocityRadiation, outerCount, 3
+        )
+
+    @property
+    def quadraticLoadFromPressureIntegration(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.SecondOrderLoad(
+            self.handle, DiffractionOutputType.QuadraticLoadFromPressureIntegration
+        )
+
+    @property
+    def quadraticLoadFromControlSurface(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.SecondOrderLoad(
+            self.handle, DiffractionOutputType.QuadraticLoadFromControlSurface
+        )
+
+    @property
+    def directPotentialLoad(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.SecondOrderLoad(self.handle, DiffractionOutputType.DirectPotentialLoad)
+
+    @property
+    def indirectPotentialLoad(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.SecondOrderLoad(self.handle, DiffractionOutputType.IndirectPotentialLoad)
+
+    @property
+    def extraRollDamping(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.ExtraRollDamping(self.handle)
+
+    @property
+    def rollDampingPercentCritical(self) -> Optional[numpy.ndarray]:
+        return HelperMethods.RollDampingPercentCritical(self.handle)
+
+
+class LinkedStatistics(object):
+
+    __slots__ = (
+        "handle",
+        "object",
+    )
+
+    def __init__(
+        self,
+        object: OrcaFlexObject,
+        varNames: Sequence[str],
+        period: PeriodArg = None,
+        objectExtra: Optional[ObjectExtra] = None,
+    ) -> None:
+        self.handle = Handle()
+        self.object = object
+
+        varCount = len(varNames)
+        vars = (ctypes.c_int * varCount)(*[object.varID(varNames[index]) for index in range(varCount)])
+        status = ctypes.c_int()
+        _OpenLinkedStatistics2(
+            self.object.handle,
+            objectExtra,
+            HelperMethods.PreparePeriod(self.object.modelHandle, period),
+            varCount,
+            vars,
+            self.handle,
+            status,
+        )
+        _CheckStatus(status)
+
+    def __del__(self) -> None:
+        try:
+            _CloseLinkedStatistics(self.handle, ctypes.c_int())
+            # no point checking status here since we can't really do anything about a failure
+        # swallow this since we get exceptions when Python terminates unexpectedly (e.g. CTRL+Z)
+        except BaseException:
+            pass
+
+    def Query(self, varName: str, linkedVarName: str) -> _DictLookup:
+        varID = self.object.varID(varName)
+        linkedVarID = self.object.varID(linkedVarName)
+        result = StatisticsQuery()
+        status = ctypes.c_int()
+        _QueryLinkedStatistics(self.handle, varID, linkedVarID, result, status)
+        _CheckStatus(status)
+        return result.asObject()
+
+    def TimeSeriesStatistics(self, varName: str) -> _DictLookup:
+        varID = self.object.varID(varName)
+        result = TimeSeriesStats()
+        status = ctypes.c_int()
+        _CalculateLinkedStatisticsTimeSeriesStatistics(self.handle, varID, result, status)
+        _CheckStatus(status)
+        return result.asObject()
+
+
+class ExtremeStatistics(object):
+
+    __slots__ = ("handle",)
+
+    def __init__(self, values: ArrayLike, sampleInterval: float) -> None:
+        self.handle = Handle()
+        values = _prepareArray(values)
+        status = ctypes.c_int()
+        _OpenExtremeStatistics(len(values), values, sampleInterval, self.handle, status)
+        _CheckStatus(status)
+
+    def __del__(self) -> None:
+        try:
+            _CloseExtremeStatistics(self.handle, ctypes.c_int())
+            # no point checking status here since we can't really do anything about a failure
+        # swallow this since we get exceptions when Python terminates unexpectedly (e.g. CTRL+Z)
+        except BaseException:
+            pass
+
+    def ExcessesOverThresholdCount(
+        self, specification: Optional[ExtremeStatisticsSpecification] = None
+    ) -> int:
+        status = ctypes.c_int()
+        count = _CalculateExtremeStatisticsExcessesOverThreshold(self.handle, specification, None, status)
+        _CheckStatus(status)
+        return count
+
+    def ExcessesOverThreshold(
+        self, specification: Optional[ExtremeStatisticsSpecification] = None
+    ) -> numpy.ndarray:
+        status = ctypes.c_int()
+        count = _CalculateExtremeStatisticsExcessesOverThreshold(self.handle, specification, None, status)
+        _CheckStatus(status)
+        values = _allocateArray(count)
+
+        _CalculateExtremeStatisticsExcessesOverThreshold(self.handle, specification, values, status)
+        _CheckStatus(status)
+        return values
+
+    def Fit(self, specification: ExtremeStatisticsSpecification) -> None:
+        status = ctypes.c_int()
+        _FitExtremeStatistics(self.handle, specification, status)
+        _CheckStatus(status)
+
+    def Query(self, query: ExtremeStatisticsQuery) -> _DictLookup:
+        result = ExtremeStatisticsOutput()
+        status = ctypes.c_int()
+        _QueryExtremeStatistics(self.handle, query, result, status)
+        _CheckStatus(status)
+        return result.asObject()
+
+    def ToleranceIntervals(self, SimulatedDataSetCount: int = 1000) -> Tuple[Tuple[float, float], ...]:
+        def generator():
+            intervals = (Interval * self.ExcessesOverThresholdCount())()
+            status = ctypes.c_int()
+            _SimulateToleranceIntervals(self.handle, SimulatedDataSetCount, intervals, status)
+            _CheckStatus(status)
+            for interval in intervals:
+                yield interval.Lower, interval.Upper
+
+        return tuple(generator())
+
+
+class Modes(object):
+
+    __slots__ = (
+        "handle",
+        "shapesAvailable",
+        "includeCoupledObjects",
+        "isWholeSystem",
+        "dofCount",
+        "modeCount",
+        "nodeNumber",
+        "dof",
+        "owner",
+        "modeNumber",
+        "period",
+    )
+
+    def __init__(
+        self,
+        obj: Union[OrcaFlexLineObject, Model],
+        specification: Optional[ModalAnalysisSpecification] = None,
+    ) -> None:
+        self.handle = Handle()
+
+        if specification is None:
+            specification = ModalAnalysisSpecification()
+        self.shapesAvailable = bool(specification.CalculateShapes)
+        self.includeCoupledObjects = bool(specification.IncludeCoupledObjects)
+        self.isWholeSystem = isinstance(obj, Model)
+
+        dofCount = ctypes.c_int()
+        modeCount = ctypes.c_int()
+        status = ctypes.c_int()
+        _CreateModes(obj.handle, specification, self.handle, dofCount, modeCount, status)
+        _CheckStatus(status)
+        self.dofCount = dofCount.value
+        self.modeCount = modeCount.value
+
+        nodeNumber = _allocateIntArray(self.dofCount)
+        dof = _allocateIntArray(self.dofCount)
+        _GetModeDegreeOfFreedomDetails(self.handle, nodeNumber, dof, status)
+        _CheckStatus(status)
+        self.nodeNumber = nodeNumber
+        self.dof = dof
+
+        def generator():
+            ownerHandle = (Handle * self.dofCount)()
+            status = ctypes.c_int()
+            _GetModeDegreeOfFreedomOwners(self.handle, ownerHandle, status)
+            _CheckStatus(status)
+            latestOwner = None
+            if self.isWholeSystem:
+                modelHandle = obj.handle
+            else:
+                modelHandle = obj.modelHandle
+            for handle in ownerHandle:
+                if (latestOwner is None) or (latestOwner.handle.value != handle):
+                    latestOwner = HelperMethods.CreateOrcaFlexObject(modelHandle, handle)
+                yield latestOwner
+
+        self.owner = tuple(generator())
+
+        modeNumber = _allocateIntArray(self.modeCount)
+        period = _allocateArray(self.modeCount)
+        _GetModeSummary(self.handle, modeNumber, period, status)
+        _CheckStatus(status)
+        self.modeNumber = modeNumber
+        self.period = period
+
+    def __del__(self) -> None:
+        try:
+            _DestroyModes(self.handle, ctypes.c_int())
+            # no point checking status here since we can't really do anything about a failure
+        # swallow this since we get exceptions when Python terminates unexpectedly (e.g. CTRL+Z)
+        except BaseException:
+            pass
+
+    def modeDetails(self, index: int) -> _DictLookup:
+        if self.shapesAvailable:
+            details = ModeDetails(self.dofCount)
+        else:
+            details = ModeDetails()
+        status = ctypes.c_int()
+        _GetModeDetails(self.handle, index, details, status)
+        _CheckStatus(status)
+        if self.shapesAvailable:
+            ShapeWrtGlobal = details.ShapeWrtGlobal
+            ShapeWrtLocal = details.ShapeWrtLocal
+        else:
+            ShapeWrtGlobal = None
+            ShapeWrtLocal = None
+        resultDict = {
+            "modeNumber": details.ModeNumber,
+            "period": details.Period,
+            "shapeWrtGlobal": ShapeWrtGlobal,
+            "shapeWrtLocal": ShapeWrtLocal,
+        }
+        if hasattr(details, "ModeType"):
+            resultDict["modeType"] = ModeType(details.ModeType)
+            resultDict["percentageInInlineDirection"] = details.PercentageInInlineDirection
+            resultDict["percentageInAxialDirection"] = details.PercentageInAxialDirection
+            resultDict["percentageInTransverseDirection"] = details.PercentageInTransverseDirection
+            resultDict["percentageInRotationalDirection"] = details.PercentageInRotationalDirection
+        else:
+            resultDict["modeType"] = ModeType.NotAvailable
+            resultDict["percentageInInlineDirection"] = OrcinaNullReal()
+            resultDict["percentageInAxialDirection"] = OrcinaNullReal()
+            resultDict["percentageInTransverseDirection"] = OrcinaNullReal()
+            resultDict["percentageInRotationalDirection"] = OrcinaNullReal()
+        if hasattr(details, "Mass"):
+            resultDict["mass"] = details.Mass
+            resultDict["stiffness"] = details.Stiffness
+        else:
+            resultDict["mass"] = OrcinaNullReal()
+            resultDict["stiffness"] = OrcinaNullReal()
+        return objectFromDict(resultDict)
+
+    @property
+    def modeLoadOutputPoints(self) -> Tuple[_DictLookup, ...]:
+        def generator():
+            outputPoints = (ModeLoadOutputPoint * HelperMethods.ModeLoadOutputPointCount(self.handle))()
+            status = ctypes.c_int()
+            _GetModeLoadOutputPoints(self.handle, None, outputPoints, status)
+            _CheckStatus(status)
+
+            latestOwner = None
+            model = None
+            for point in outputPoints:
+                if model is None:
+                    modelHandle = HelperMethods.GetModelHandle(point.Owner)
+                    model = Model(handle=modelHandle)
+                if (latestOwner is None) or (latestOwner.handle.value != point.Owner):
+                    latestOwner = HelperMethods.CreateOrcaFlexObject(model.handle, point.Owner)
+                yield objectFromDict({"owner": latestOwner, "arclength": point.Arclength})
+
+        return tuple(generator())
+
+    def modeLoad(self, index: int) -> Tuple[_DictLookup, ...]:
+        def generator():
+            count = HelperMethods.ModeLoadOutputPointCount(self.handle)
+            loads = _allocateArray(6 * count)
+            status = ctypes.c_int()
+            _GetModeLoad(self.handle, index, loads, status)
+            _CheckStatus(status)
+            for pointIndex in range(count):
+                yield objectFromDict(
+                    {
+                        "force": loads[pointIndex * 6 : pointIndex * 6 + 3],
+                        "moment": loads[pointIndex * 6 + 3 : pointIndex * 6 + 6],
+                    }
+                )
+
+        return tuple(generator())
+
+
+class AVIFile(object):
+
+    __slots__ = "handle", "width", "height"
+
+    def __init__(
+        self,
+        filename: Union[str, os.PathLike],
+        codec: str,
+        interval: float,
+        width: int,
+        height: int,
+    ) -> None:
+        self.width = width
+        self.height = height
+        self.handle: Optional[Handle] = Handle()
+        params = AVIFileParameters(codec, interval)
+        status = ctypes.c_int()
+        _AVIFileInitialise(self.handle, str(filename), params, status)
+        _CheckStatus(status)
+
+    def AddFrame(
+        self,
+        model: Model,
+        drawTime: float,
+        viewParameters: Optional[ViewParameters] = None,
+    ) -> None:
+        if viewParameters is None:
+            viewParameters = model.defaultViewParameters
+        viewParameters.Height = self.height
+        viewParameters.Width = self.width
+        frame = ctypes.wintypes.HBITMAP()
+        saveDrawTime = model.simulationDrawTime
+        try:
+            model.simulationDrawTime = drawTime
+            status = ctypes.c_int()
+            _CreateModel3DViewBitmap(model.handle, viewParameters, frame, status)
+            _CheckStatus(status)
+            try:
+                _AVIFileAddBitmap(self.handle, frame, status)
+                _CheckStatus(status)
+            finally:
+                if not _DeleteObject(frame):
+                    raise ctypes.WinError()
+        finally:
+            model.simulationDrawTime = saveDrawTime
+
+    def Close(self) -> None:
+        if self.handle is not None:
+            status = ctypes.c_int()
+            _AVIFileFinalise(self.handle, status)
+            _CheckStatus(status)
+            self.handle = None
+
+
+@contextlib.contextmanager
+def OpenAVIFile(
+    filename: Union[str, os.PathLike],
+    codec: str,
+    interval: float,
+    width: int,
+    height: int,
+) -> Generator[AVIFile, None, None]:
+    file = AVIFile(filename, codec, interval, width, height)
+    try:
+        yield file
+    finally:
+        file.Close()
+
+
+class BitmapCanvas(object):
+
+    __slots__ = ("handle",)
+
+    def __init__(
+        self,
+        width: int,
+        height: int,
+    ) -> None:
+        self.handle: Optional[Handle] = Handle()
+        status = ctypes.c_int()
+        _CreateBitmapCanvas(width, height, self.handle, status)
+        _CheckStatus(status)
+
+    def Draw(self, model: Model, viewParameters: Optional[ViewParameters] = None) -> None:
+        status = ctypes.c_int()
+        _DrawModel3DViewToBitmapCanvas(self.handle, model.handle, viewParameters, status)
+        _CheckStatus(status)
+
+    def Save(
+        self,
+        fileName: Union[str, os.PathLike],
+        fileFormat: BitmapFileFormat,
+        jpegCompressionQuality: Optional[int] = None,
+    ) -> None:
+        saveFormat = BitmapCanvasSaveFormat(fileFormat, jpegCompressionQuality)
+        status = ctypes.c_int()
+        _SaveBitmapCanvasW(self.handle, saveFormat, str(fileName), status)
+        _CheckStatus(status)
+
+    def SaveMem(self, fileFormat: BitmapFileFormat, jpegCompressionQuality: Optional[int] = None) -> bytes:
+        saveFormat = BitmapCanvasSaveFormat(fileFormat, jpegCompressionQuality)
+        buffer = Handle()
+        bufferLen = ctypes.c_int64()
+        status = ctypes.c_int()
+        _SaveBitmapCanvasMem(self.handle, saveFormat, buffer, bufferLen, status)
+        _CheckStatus(status)
+        return HelperMethods.CopyAndFreeBuffer(buffer, bufferLen.value)
+
+    def Close(self) -> None:
+        if self.handle is not None:
+            status = ctypes.c_int()
+            _DestroyBitmapCanvas(self.handle, status)
+            _CheckStatus(status)
+            self.handle = None
+
+
+@contextlib.contextmanager
+def CreateBitmapCanvas(
+    width: int,
+    height: int,
+) -> Generator[BitmapCanvas, None, None]:
+    canvas = BitmapCanvas(width, height)
+    try:
+        yield canvas
+    finally:
+        canvas.Close()
+
+
+class CollatedResults(object):
+
+    __slots__ = "modelHandle", "period", "restartModels", "handle"
+
+    def __init__(
+        self,
+        model: Union[Model, Handle],
+        period: PeriodArg = None,
+        restartModels: Optional[Iterable[int]] = None,
+    ) -> None:
+        self.modelHandle = getattr(model, "handle", model)
+        self.period = HelperMethods.PreparePeriodCollated(period)
+        self.restartModels = HelperMethods.PrepareRestartModels(restartModels)
+        self.handle = Handle()
+
+    def __enter__(self) -> "CollatedResults":
+        status = ctypes.c_int()
+        modelCount = len(self.restartModels) if self.restartModels is not None else 0
+        _CreateCollatedResultsAdmin(
+            self.modelHandle,
+            modelCount,
+            self.restartModels,
+            self.period,
+            self.handle,
+            status,
+        )
+        _CheckStatus(status)
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_traceback) -> None:
+        status = ctypes.c_int()
+        # no point checking status here since we can't really do anything about a failure
+        _DestroyCollatedResultsAdmin(self.handle, status)
+
+    @property
+    def sampleCount(self) -> int:
+        status = ctypes.c_int()
+        result = _GetNumOfSamplesCollated(self.handle, status)
+        _CheckStatus(status)
+        return result
+
+    def SampleTimes(self) -> numpy.ndarray:
+        status = ctypes.c_int()
+        samples = _allocateArray(self.sampleCount)
+        _GetSampleTimesCollated(self.handle, samples, status)
+        _CheckStatus(status)
+        return samples
+
+    def TimeHistory(
+        self,
+        obj: OrcaFlexObject,
+        varNames: Union[str, Iterable[str]],
+        objectExtra: Optional[ObjectExtra] = None,
+    ) -> numpy.ndarray:
+        status = ctypes.c_int()
+        if isinstance(varNames, str):
+            values = _allocateArray(self.sampleCount)
+            _GetTimeHistoryCollated(
+                self.handle,
+                obj.handle,
+                objectExtra,
+                obj.varID(varNames),
+                values,
+                status,
+            )
+            _CheckStatus(status)
+            return values
+        else:
+            spec = [TimeHistorySpecification(obj, varName, objectExtra) for varName in varNames]
+            return self.GetMultipleTimeHistories(spec)
+
+    def GetMultipleTimeHistories(self, specification: Sequence[_DictLookup]) -> numpy.ndarray:
+        specCount = len(specification)
+        if specCount == 0:
+            return numpy.array([])
+
+        specAPI = (_TimeHistorySpecification * specCount)()
+        for index, item in enumerate(specification):
+            specAPI[index].ObjectHandle = item.modelObject.handle  # type: ignore [attr-defined]
+            specAPI[index].ObjectExtra = (
+                ctypes.pointer(item.objectExtra) if item.objectExtra is not None else None  # type: ignore [attr-defined]
+            )  # type: ignore [attr-defined]
+            specAPI[index].VarID = item.modelObject.varID(item.varName)  # type: ignore [attr-defined]
+
+        status = ctypes.c_int()
+        sampleCount = self.sampleCount
+        values = _allocateArray(specCount * sampleCount)
+        _GetMultipleTimeHistoriesCollated(self.handle, specCount, specAPI, values, status)
+        _CheckStatus(status)
+        return numpy.reshape(values, (sampleCount, specCount))
+
+    def RangeGraph(
+        self,
+        obj: OrcaFlexRangeGraphObject,
+        varName: str,
+        objectExtra: Optional[ObjectExtra] = None,
+        arclengthRange: Optional[ArclengthRange] = None,
+    ) -> _DictLookup:
+        def allocIfCurveAvailable(curveName, pointCount):
+            if hasattr(curveNames, curveName):
+                return _allocateArray(pointCount)
+            else:
+                return None
+
+        status = ctypes.c_int()
+        varID = obj.varID(varName)
+        curveNames = RangeGraphCurveNames()
+        defaultPeriod = HelperMethods.PreparePeriod(self.modelHandle, None)
+        if ImportedFunctionAvailable(_GetRangeGraphCurveNamesCollated):
+            _GetRangeGraphCurveNamesCollated(self.handle, obj.handle, objectExtra, varID, curveNames, status)
+            _CheckStatus(status)
+        else:
+            _GetRangeGraphCurveNames(obj.handle, objectExtra, defaultPeriod, varID, curveNames, status)
+            _CheckStatus(status)
+        if ImportedFunctionAvailable(_GetRangeGraphNumOfPointsCollated):
+            pointCount = _GetRangeGraphNumOfPointsCollated(
+                self.handle, obj.handle, arclengthRange, varID, status
+            )
+            _CheckStatus(status)
+        else:
+            pointCount = HelperMethods.RangeGraphPointCount(
+                obj.handle, obj.type, varID, arclengthRange, defaultPeriod
+            )
+        x = _allocateArray(pointCount)
+        min = allocIfCurveAvailable("Min", pointCount)
+        max = allocIfCurveAvailable("Max", pointCount)
+        mean = allocIfCurveAvailable("Mean", pointCount)
+        stddev = allocIfCurveAvailable("StdDev", pointCount)
+        upper = allocIfCurveAvailable("Upper", pointCount)
+        lower = allocIfCurveAvailable("Lower", pointCount)
+        _GetRangeGraphCollated(
+            self.handle,
+            obj.handle,
+            objectExtra,
+            arclengthRange,
+            varID,
+            x,
+            min,
+            max,
+            mean,
+            stddev,
+            upper,
+            lower,
+            status,
+        )
+        _CheckStatus(status)
+
+        return objectFromDict(
+            {
+                "X": x,
+                "Min": min,
+                "Max": max,
+                "Mean": mean,
+                "StdDev": stddev,
+                "Upper": upper,
+                "Lower": lower,
+            }
+        )
+
+
+def TimeHistorySpecification(
+    modelObject: OrcaFlexObject, varName: str, objectExtra: Optional[ObjectExtra] = None
+) -> _DictLookup:
+    return objectFromDict({"modelObject": modelObject, "objectExtra": objectExtra, "varName": varName})
+
+
+def GetMultipleTimeHistories(specification: Sequence[_DictLookup], period: PeriodArg = None) -> numpy.ndarray:
+    count = len(specification)
+    if count == 0:
+        return numpy.array([])
+
+    status = ctypes.c_int()
+    modelHandle = specification[0].modelObject.modelHandle  # type: ignore [attr-defined]
+    period = HelperMethods.PreparePeriod(modelHandle, period)
+    sampleCount = _GetNumOfSamples(modelHandle, period, status)
+    _CheckStatus(status)
+
+    specAPI = (_TimeHistorySpecification * count)()
+    for index, item in enumerate(specification):
+        specAPI[index].ObjectHandle = item.modelObject.handle  # type: ignore [attr-defined]
+        specAPI[index].ObjectExtra = (
+            ctypes.pointer(item.objectExtra) if item.objectExtra is not None else None  # type: ignore [attr-defined]
+        )  # type: ignore [attr-defined]
+        specAPI[index].VarID = item.modelObject.varID(item.varName)  # type: ignore [attr-defined]
+
+    values = _allocateArray(count * sampleCount)
+    _GetMultipleTimeHistories(count, specAPI, period, values, status)
+    _CheckStatus(status)
+    return numpy.reshape(values, (sampleCount, count))
+
+
+def GetMultipleTimeHistoriesCollated(
+    specification: Sequence[_DictLookup],
+    period: PeriodArg = None,
+    restartModels: Optional[Iterable[int]] = None,
+) -> numpy.ndarray:
+    specCount = len(specification)
+    if specCount == 0:
+        return numpy.array([])
+
+    # type: ignore [attr-defined]
+    with CollatedResults(specification[0].modelObject.modelHandle, period, restartModels) as collatedResults:  # type: ignore [attr-defined]
+        return collatedResults.GetMultipleTimeHistories(specification)
+
+
+def TimeSeriesStatistics(values: ArrayLike, sampleInterval: float) -> _DictLookup:
+    values = _prepareArray(values)
+    result = TimeSeriesStats()
+    status = ctypes.c_int()
+    _CalculateTimeSeriesStatistics(values, len(values), sampleInterval, result, status)
+    _CheckStatus(status)
+    return result.asObject()
+
+
+def AnalyseExtrema(values):
+    values = _prepareArray(values)
+    max = ctypes.c_double()
+    min = ctypes.c_double()
+    indexOfMax = ctypes.c_int()
+    indexOfMin = ctypes.c_int()
+    status = ctypes.c_int()
+    _AnalyseExtrema(values, len(values), max, min, indexOfMax, indexOfMin, status)
+    _CheckStatus(status)
+    return objectFromDict(
+        {
+            "Min": min.value,
+            "Max": max.value,
+            "IndexOfMin": indexOfMin.value,
+            "IndexOfMax": indexOfMax.value,
+        }
+    )
+
+
+def SpectralDensity(
+    times: ArrayLike, values: ArrayLike, fundamentalFrequency: Optional[float] = None
+) -> GraphCurve:
+    return HelperMethods.TimeHistorySummary(
+        TimeHistorySummaryType.SpectralDensity, times, values, fundamentalFrequency
+    )
+
+
+def EmpiricalDistribution(values: ArrayLike) -> GraphCurve:
+    return HelperMethods.TimeHistorySummary(TimeHistorySummaryType.EmpiricalDistribution, None, values)
+
+
+def RainflowHalfCycles(values: ArrayLike) -> numpy.ndarray:
+    return HelperMethods.TimeHistorySummary(TimeHistorySummaryType.RainflowHalfCycles, None, values).X
+
+
+def UnorderedRainflowHalfCycles(values: ArrayLike) -> numpy.ndarray:
+    return HelperMethods.TimeHistorySummary(TimeHistorySummaryType.RainflowAssociatedMean, None, values).X
+
+
+def RainflowAssociatedMean(values: ArrayLike) -> _DictLookup:
+    summary = HelperMethods.TimeHistorySummary(TimeHistorySummaryType.RainflowAssociatedMean, None, values)
+    if _CalculateRratioAvailable:
+        return objectFromDict(
+            {
+                "HalfCycleRange": summary.X,
+                "AssociatedMean": summary.Y,
+                "Rratio": Rratio(summary.X, summary.Y),
+            }
+        )
+    else:
+        return objectFromDict({"HalfCycleRange": summary.X, "AssociatedMean": summary.Y})
+
+
+def Rratio(range: ArrayLike, associatedMean: ArrayLike) -> numpy.ndarray:
+    range = _prepareArray(range)
+    associatedMean = _prepareArray(associatedMean)
+    if len(range) != len(associatedMean):
+        raise ValueError("range and associatedMean must have the same length")
+    Rratio = _allocateArray(len(range))
+    status = ctypes.c_int()
+    _CalculateRratio(len(range), range, associatedMean, Rratio, status)
+    _CheckStatus(status)
+    return Rratio
+
+
+def CycleHistogramBins(halfCycleRanges: ArrayLike, binSize: Optional[float] = None) -> Tuple[CycleBin, ...]:
+    if binSize is None:
+        binSize = OrcinaDefaultReal()
+    halfCycleRanges = _prepareArray(halfCycleRanges)
+    binCount = ctypes.c_int()
+    bins = ctypes.POINTER(CycleBin)()
+    status = ctypes.c_int()
+    _CreateCycleHistogramBins(len(halfCycleRanges), halfCycleRanges, binSize, binCount, bins, status),
+    _CheckStatus(status)
+
+    def generator():
+        for index in range(binCount.value):
+            # clone bins[index], see http://stackoverflow.com/q/1470343/
+            bin = CycleBin()
+            ctypes.pointer(bin)[0] = bins[index]
+            yield bin
+
+    result = tuple(generator())
+
+    # no point checking status here since we can't really do anything about a failure
+    _DestroyCycleHistogramBins(bins, status)
+
+    return result
+
+
+def FrequencyDomainMPM(stormDuration: float, StdDev: float, Tz: float) -> float:
+    result = ctypes.c_double()
+    status = ctypes.c_int()
+    _GetFrequencyDomainMPM(stormDuration, StdDev, Tz, result, status)
+    _CheckStatus(status)
+    return result.value
+
+
+def MoveObjectDisplacementSpecification(
+    displacement: Sequence[float],
+) -> MoveObjectSpecification:
+    result = MoveObjectSpecification()
+    result.MoveSpecifiedBy = MoveSpecifiedBy.Displacement
+    result.Displacement = (ctypes.c_double * 3)(*displacement)
+    return result
+
+
+def MoveObjectPolarDisplacementSpecification(direction: float, distance: float) -> MoveObjectSpecification:
+    result = MoveObjectSpecification()
+    result.MoveSpecifiedBy = MoveSpecifiedBy.PolarDisplacement
+    result.PolarDisplacementDirection = direction
+    result.PolarDisplacementDistance = distance
+    return result
+
+
+def MoveObjectNewPositionSpecification(
+    referenceObject: OrcaFlexObject,
+    referencePointIndex: int,
+    newPosition: Sequence[float],
+) -> MoveObjectSpecification:
+    result = MoveObjectSpecification()
+    result.MoveSpecifiedBy = MoveSpecifiedBy.NewPosition
+    result.NewPositionReferencePoint = MoveObjectPoint(referenceObject, referencePointIndex)
+    result.NewPosition = (ctypes.c_double * 3)(*newPosition)
+    return result
+
+
+def MoveObjectRotationSpecification(angle: float, centre: Sequence[float]) -> MoveObjectSpecification:
+    result = MoveObjectSpecification()
+    result.MoveSpecifiedBy = MoveSpecifiedBy.Rotation
+    result.RotationAngle = angle
+    result.RotationCentre = (ctypes.c_double * 2)(*centre)
+    return result
+
+
+def MoveObjects(specification: MoveObjectSpecification, points: Sequence[MoveObjectPoint]):
+    points = (MoveObjectPoint * len(points))(*points)  # type: ignore [assignment]
+    status = ctypes.c_int()
+    _MoveObjects(specification, len(points), points, status)
+    _CheckStatus(status)
+
+
+def CompoundProperties(
+    objects: Sequence[OrcaFlexObject],
+    referenceObject: Optional[OrcaFlexObject] = None,
+    referencePoint: Optional[str] = None,
+) -> _DictLookup:
+    objects = (Handle * len(objects))(*[obj.handle for obj in objects])  # type: ignore [assignment]
+    if referenceObject is not None:
+        referenceObject = referenceObject.handle  # type: ignore [assignment]
+    properties = _CompoundProperties()
+    status = ctypes.c_int()
+    _GetCompoundProperties(len(objects), objects, referenceObject, referencePoint, properties, status)
+    _CheckStatus(status)
+    return objectFromDict(
+        {
+            "Mass": properties.Mass,
+            "CentreOfMass": numpy.array(properties.CentreOfMass[:]),
+            "MassMomentOfInertia": numpy.reshape(properties.MassMomentOfInertia[:], (3, 3)),
+            "Volume": properties.Volume,
+            "CentreOfVolume": numpy.array(properties.CentreOfVolume[:]),
+        }
+    )
+
+
+def ExchangeObjects(object1: OrcaFlexObject, object2: OrcaFlexObject) -> None:
+    status = ctypes.c_int()
+    _ExchangeObjects(object1.handle, object2.handle, status)
+    _CheckStatus(status)
+
+
+def SortObjects(objects: Sequence[OrcaFlexObject], key: Callable[[OrcaFlexObject], Any]) -> None:
+    objects = list(objects)
+    N = len(objects)
+    indices = list(range(N))
+    locations = indices[:]
+    order = indices[:]
+    order.sort(key=lambda i: key(objects[i]))
+    indices = list(range(N))
+    locations = indices[:]
+    for i in range(N):
+        index1, index2 = i, locations[order[i]]
+        ExchangeObjects(objects[indices[index1]], objects[indices[index2]])
+        locations[indices[index1]], locations[indices[index2]] = index2, index1
+        indices[index1], indices[index2] = indices[index2], indices[index1]
+
+
+def CalculateMooringStiffness(vessels: Sequence[OrcaFlexVesselObject]) -> numpy.ndarray:
+    status = ctypes.c_int()
+    N = len(vessels)
+    vesselHandles = (Handle * N)(*map(lambda vessel: vessel.handle, vessels))
+    dofCount = 6 * N
+    result = numpy.empty(dofCount * dofCount, dtype=numpy.float64)
+    _CalculateMooringStiffness(len(vesselHandles), vesselHandles, result, status)
+    _CheckStatus(status)
+    return result.reshape((dofCount, dofCount))
+
+
+def ReadPanelMesh(
+    filename: Union[str, os.PathLike],
+    format: PanelMeshFileFormat,
+    scale: float = 1,
+    bodyNumber: int = 1,
+    importDryPanels: bool = True,
+) -> _DictLookup:
+    with HelperMethods.PanelMeshImporter(filename, format, scale, bodyNumber, importDryPanels) as importer:
+        panelCount = importer.panelCount  # type: ignore [attr-defined]
+        symmetry = importer.symmetry  # type: ignore [attr-defined]
+        panels = _allocateArray(panelCount * 12)
+        status = ctypes.c_int()
+        _GetPanels(importer.handle, panels, status)  # type: ignore [attr-defined]
+
+    panels.shape = panelCount, 4, 3
+    return objectFromDict({"panels": panels, "symmetry": symmetry})
+
+
+def SetLibraryPolicy(name: str, value: Optional[str] = None) -> None:
+    status = ctypes.c_int()
+    if value is not None:
+        value = str(value)  # so that we can pass integers or booleans for policies of those types
+    _SetLibraryPolicy(name, value, status)
+    _CheckStatus(status)
+
+
+def DLLBuildDate() -> datetime:
+    return datetime.utcfromtimestamp(_GetDLLBuildDate())
+
+
+def DLLLocation() -> str:
+    filename = (_char * ctypes.wintypes.MAX_PATH)()
+    returnValue = _GetModuleFileName(_lib._handle, filename, ctypes.wintypes.MAX_PATH)
+    if returnValue == 0:
+        raise ctypes.WinError()
+    return _DecodeString(filename.value)
+
+
+def DLLVersion() -> str:
+    v = (_char * 16)()
+    status = ctypes.c_int()
+    _GetDLLVersion(None, v, ctypes.c_int(), status)
+    _CheckStatus(status)
+    return _DecodeString(v.value)
+
+
+def RegisterLicenceNotFoundHandler(handler: Optional[Callable[[LicenceReconnectionAction], bool]]) -> None:
+    global _licenceNotFoundCallback
+    if handler:
+
+        def callback(action, attemptReconnection, data):
+            attemptReconnection[0] = ctypes.wintypes.BOOL(handler(action))
+
+        _licenceNotFoundCallback = _LicenceNotFoundHandlerProc(callback)  # type: ignore [name-defined]
+    else:
+        _licenceNotFoundCallback = None  # type: ignore [name-defined]
+    status = ctypes.c_int()
+    _RegisterLicenceNotFoundHandler(_licenceNotFoundCallback, status)  # type: ignore [name-defined]
+    _CheckStatus(status)
+
+
+def BinaryFileType(filename: Union[str, os.PathLike]) -> FileType:
+    ft = ctypes.c_int()
+    status = ctypes.c_int()
+    _GetBinaryFileType(str(filename), ft, status)
+    _CheckStatus(status)
+    return FileType(ft.value)
+
+
+def FileCreatorVersion(filename: Union[str, os.PathLike]) -> str:
+    filename = str(filename)
+    status = ctypes.c_int()
+    length = _GetFileCreatorVersion(filename, None, status)
+    _CheckStatus(status)
+    result = (_char * length)()
+    _GetFileCreatorVersion(filename, result, status)
+    _CheckStatus(status)
+    return _DecodeString(result.value)
+
+
+def RestartParentFileName(filename: Union[str, os.PathLike]) -> Optional[str]:
+    status = ctypes.c_int()
+    buffer = Handle()
+    bufferLen = ctypes.c_int64()
+    length = _GetRestartParentFileName(str(filename), buffer, bufferLen, status)
+    _CheckStatus(status)
+    parentFileName = HelperMethods.CopyToStringAndFreeBuffer(buffer, bufferLen.value)
+    return parentFileName if parentFileName else None
+
+
+def RemoveRestartStateFromSimulationFile(filename: Union[str, os.PathLike]) -> int:
+    bytesRemoved = ctypes.c_int64()
+    status = ctypes.c_int()
+    _RemoveRestartStateFromSimulationFile(str(filename), True, bytesRemoved, status)
+    _CheckStatus(status)
+    return bytesRemoved.value
+
+
+def RestartStateBytesInSimulationFile(filename: Union[str, os.PathLike]) -> int:
+    bytesRemoved = ctypes.c_int64()
+    status = ctypes.c_int()
+    _RemoveRestartStateFromSimulationFile(str(filename), False, bytesRemoved, status)
+    _CheckStatus(status)
+    return bytesRemoved.value
+
+
+def ActualRestartStateRecordingTimes(filename: Union[str, os.PathLike]) -> numpy.ndarray:
+    buffer = Handle()
+    bufferLen = ctypes.c_int64()
+    status = ctypes.c_int()
+    _GetActualRestartStateRecordingTimes(str(filename), buffer, bufferLen, status)
+    _CheckStatus(status)
+    return HelperMethods.CopyToDoubleArrayAndFreeBuffer(buffer, bufferLen.value)
+
+
+def SolveEquation(
+    calcY: Callable[[float], float],
+    initialX: float,
+    targetY: float,
+    params: Optional[SolveEquationParameters] = None,
+) -> float:
+    def callback(data, X, callbackStatus):
+        return calcY(X)
+
+    solveEquationCalcYProc = _SolveEquationCalcYProc(callback)
+    result = ctypes.c_double(initialX)
+    status = ctypes.c_int()
+    _SolveEquation(None, solveEquationCalcYProc, result, targetY, params, status)
+    _CheckStatus(status)
+    return result.value
